@@ -1843,6 +1843,14 @@ func (v *Viper) WatchRemoteConfigOnChannel() error {
 	return v.watchKeyValueConfigOnChannel()
 }
 
+// WatchRemoteConfigWithChannel WatchRemoteConfigOnChannel 的增强实现,多了channel回调
+//  @receiver v
+//  @param receiver
+//  @return error
+func (v *Viper) WatchRemoteConfigWithChannel(receiver chan struct{}) error {
+	return v.watchKeyValueConfigWithChannel(receiver)
+}
+
 // Retrieve the first found remote configuration.
 func (v *Viper) getKeyValueConfig() error {
 	if RemoteConfig == nil {
@@ -1883,6 +1891,29 @@ func (v *Viper) watchKeyValueConfigOnChannel() error {
 				b := <-rc
 				reader := bytes.NewReader(b.Value)
 				v.unmarshalReader(reader, v.kvstore)
+			}
+		}(respc)
+		return nil
+	}
+	return RemoteConfigError("No Files Found")
+}
+
+// watchKeyValueConfigWithChannel Retrieve the first found remote configuration.
+//  比 watchKeyValueConfigOnChannel 多了channel回调
+func (v *Viper) watchKeyValueConfigWithChannel(reciver chan struct{}) error {
+	for _, rp := range v.remoteProviders {
+		respc, _ := RemoteConfig.WatchChannel(rp)
+		// Todo: Add quit channel
+		go func(rc <-chan *RemoteResponse) {
+			for {
+				b := <-rc
+				if b.Error != nil {
+					v.logger.Error("viper watchKeyValueConfigWithChannel error,cause:" + b.Error.Error())
+					continue
+				}
+				reader := bytes.NewReader(b.Value)
+				v.unmarshalReader(reader, v.kvstore)
+				reciver <- struct{}{}
 			}
 		}(respc)
 		return nil
