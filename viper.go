@@ -1856,17 +1856,20 @@ func (v *Viper) getKeyValueConfig() error {
 	if RemoteConfig == nil {
 		return RemoteConfigError("Enable the remote features by doing a blank import of the viper/remote package: '_ github.com/spf13/viper/remote'")
 	}
-
+	var found = false
 	for _, rp := range v.remoteProviders {
 		val, err := v.getRemoteConfig(rp)
 		if err != nil {
 			v.logger.Error(fmt.Errorf("get remote config: %w", err).Error())
-
 			continue
 		}
-
-		v.kvstore = val
-
+		found = true
+		// 允许多个远程文件合并
+		for k, v_ := range val {
+			v.kvstore[k] = v_
+		}
+	}
+	if found {
 		return nil
 	}
 	return RemoteConfigError("No Files Found")
