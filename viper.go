@@ -384,6 +384,7 @@ func (v *Viper) resetEncoding() {
 type defaultRemoteProvider struct {
 	provider      string
 	endpoint      string
+	endpoints     []string
 	path          string
 	secretKeyring string
 }
@@ -394,6 +395,10 @@ func (rp defaultRemoteProvider) Provider() string {
 
 func (rp defaultRemoteProvider) Endpoint() string {
 	return rp.endpoint
+}
+
+func (rp defaultRemoteProvider) Endpoints() []string {
+	return rp.endpoints
 }
 
 func (rp defaultRemoteProvider) Path() string {
@@ -411,6 +416,7 @@ func (rp defaultRemoteProvider) SecretKeyring() string {
 type RemoteProvider interface {
 	Provider() string
 	Endpoint() string
+	Endpoints() []string
 	Path() string
 	SecretKeyring() string
 }
@@ -419,7 +425,7 @@ type RemoteProvider interface {
 var SupportedExts = []string{"json", "toml", "yaml", "yml", "properties", "props", "prop", "hcl", "tfvars", "dotenv", "env", "ini"}
 
 // SupportedRemoteProviders are universally supported remote providers.
-var SupportedRemoteProviders = []string{"etcd", "consul", "firestore"}
+var SupportedRemoteProviders = []string{"etcd3", "etcd", "consul", "firestore"}
 
 func OnConfigChange(run func(in fsnotify.Event)) { v.OnConfigChange(run) }
 func (v *Viper) OnConfigChange(run func(in fsnotify.Event)) {
@@ -594,6 +600,25 @@ func (v *Viper) AddRemoteProvider(provider, endpoint, path string) error {
 			endpoint: endpoint,
 			provider: provider,
 			path:     path,
+		}
+		if !v.providerPathExists(rp) {
+			v.remoteProviders = append(v.remoteProviders, rp)
+		}
+	}
+	return nil
+}
+
+func (v *Viper) AddRemoteProviderCluster(provider string, endpoints []string, path string) error {
+	if !stringInSlice(provider, SupportedRemoteProviders) {
+		return UnsupportedRemoteProviderError(provider)
+	}
+	if provider != "" && len(endpoints) != 0 {
+		v.logger.Info("adding remote provider", "provider", provider, "endpoints", endpoints)
+
+		rp := &defaultRemoteProvider{
+			endpoints: endpoints,
+			provider:  provider,
+			path:      path,
 		}
 		if !v.providerPathExists(rp) {
 			v.remoteProviders = append(v.remoteProviders, rp)

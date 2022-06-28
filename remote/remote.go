@@ -74,6 +74,10 @@ func (rc remoteConfigProvider) WatchChannel(rp viper.RemoteProvider) (<-chan *vi
 func getConfigManager(rp viper.RemoteProvider) (crypt.ConfigManager, error) {
 	var cm crypt.ConfigManager
 	var err error
+	endpoints := []string{rp.Endpoint()}
+	if len(rp.Endpoints()) > 0 {
+		endpoints = rp.Endpoints()
+	}
 
 	if rp.SecretKeyring() != "" {
 		var kr *os.File
@@ -84,24 +88,24 @@ func getConfigManager(rp viper.RemoteProvider) (crypt.ConfigManager, error) {
 		defer kr.Close()
 		switch rp.Provider() {
 		case "etcd":
-			cm, err = crypt.NewEtcdConfigManager([]string{rp.Endpoint()}, kr)
+			cm, err = crypt.NewEtcdConfigManager(endpoints, kr)
 		case "etcd3":
-			cm, err = crypt.NewEtcdV3ConfigManager([]string{rp.Endpoint()}, kr)
+			cm, err = crypt.NewEtcdV3ConfigManager(endpoints, kr)
 		case "firestore":
-			cm, err = crypt.NewFirestoreConfigManager([]string{rp.Endpoint()}, kr)
+			cm, err = crypt.NewFirestoreConfigManager(endpoints, kr)
 		default:
-			cm, err = crypt.NewConsulConfigManager([]string{rp.Endpoint()}, kr)
+			cm, err = crypt.NewConsulConfigManager(endpoints, kr)
 		}
 	} else {
 		switch rp.Provider() {
 		case "etcd":
-			cm, err = crypt.NewStandardEtcdConfigManager([]string{rp.Endpoint()})
+			cm, err = crypt.NewStandardEtcdConfigManager(endpoints)
 		case "etcd3":
-			cm, err = crypt.NewStandardEtcdV3ConfigManager([]string{rp.Endpoint()})
+			cm, err = crypt.NewStandardEtcdV3ConfigManager(endpoints)
 		case "firestore":
-			cm, err = crypt.NewStandardFirestoreConfigManager([]string{rp.Endpoint()})
+			cm, err = crypt.NewStandardFirestoreConfigManager(endpoints)
 		default:
-			cm, err = crypt.NewStandardConsulConfigManager([]string{rp.Endpoint()})
+			cm, err = crypt.NewStandardConsulConfigManager(endpoints)
 		}
 	}
 	if err != nil {
