@@ -1956,6 +1956,7 @@ func (v *Viper) watchKeyValueConfigWithChannel(reciver chan struct{}) error {
 		go func(rc <-chan *RemoteResponse) {
 			for {
 				b := <-rc
+				// 官方这里没有打印error
 				if b.Error != nil {
 					v.logger.Error("viper watchKeyValueConfigWithChannel error,cause:" + b.Error.Error())
 					continue
@@ -1965,6 +1966,10 @@ func (v *Viper) watchKeyValueConfigWithChannel(reciver chan struct{}) error {
 				reciver <- struct{}{}
 			}
 		}(respc)
+		// 官方bug 造成只监听一个 provider
+		// return nil
+	}
+	if len(v.remoteProviders) > 0 {
 		return nil
 	}
 	return RemoteConfigError("No Files Found")
