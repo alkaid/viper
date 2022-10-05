@@ -9,7 +9,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"io/ioutil"
+	"io/ioutil" //nolint:staticcheck
 	"os"
 	"os/exec"
 	"path"
@@ -998,7 +998,7 @@ func TestBindPFlags(t *testing.T) {
 	}
 }
 
-// nolint: dupl
+//nolint:dupl
 func TestBindPFlagsStringSlice(t *testing.T) {
 	tests := []struct {
 		Expected []string
@@ -1046,7 +1046,7 @@ func TestBindPFlagsStringSlice(t *testing.T) {
 	}
 }
 
-// nolint: dupl
+//nolint:dupl
 func TestBindPFlagsStringArray(t *testing.T) {
 	tests := []struct {
 		Expected []string
@@ -1094,7 +1094,7 @@ func TestBindPFlagsStringArray(t *testing.T) {
 	}
 }
 
-// nolint: dupl
+//nolint:dupl
 func TestBindPFlagsIntSlice(t *testing.T) {
 	tests := []struct {
 		Expected []int
@@ -1953,6 +1953,10 @@ func TestMergeConfig(t *testing.T) {
 		t.Fatalf("uint pop != 37890, = %d", pop)
 	}
 
+	if pop := v.GetUint16("hello.pop"); pop != uint16(37890) {
+		t.Fatalf("uint pop != 37890, = %d", pop)
+	}
+
 	if pop := v.GetUint32("hello.pop"); pop != 37890 {
 		t.Fatalf("uint32 pop != 37890, = %d", pop)
 	}
@@ -2516,7 +2520,10 @@ func TestKeyDelimiter(t *testing.T) {
 }
 
 var yamlDeepNestedSlices = []byte(`TV:
-- title: "The expanse"
+- title: "The Expanse"
+  title_i18n:
+    USA: "The Expanse"
+    Japan: "エクスパンス -巨獣めざめる-"
   seasons:
   - first_released: "December 14, 2015"
     episodes:
@@ -2546,10 +2553,14 @@ func TestSliceIndexAccess(t *testing.T) {
 	err := v.unmarshalReader(r, v.config)
 	require.NoError(t, err)
 
-	assert.Equal(t, "The expanse", v.GetString("tv.0.title"))
+	assert.Equal(t, "The Expanse", v.GetString("tv.0.title"))
 	assert.Equal(t, "February 1, 2017", v.GetString("tv.0.seasons.1.first_released"))
 	assert.Equal(t, "Static", v.GetString("tv.0.seasons.1.episodes.2.title"))
 	assert.Equal(t, "December 15, 2015", v.GetString("tv.0.seasons.0.episodes.1.air_date"))
+
+	// Test nested keys with capital letters
+	assert.Equal(t, "The Expanse", v.GetString("tv.0.title_i18n.USA"))
+	assert.Equal(t, "エクスパンス -巨獣めざめる-", v.GetString("tv.0.title_i18n.Japan"))
 
 	// Test for index out of bounds
 	assert.Equal(t, "", v.GetString("tv.0.seasons.2.first_released"))
