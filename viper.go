@@ -1899,9 +1899,10 @@ func (v *Viper) WatchRemoteConfigOnChannel() error {
 }
 
 // WatchRemoteConfigWithChannel WatchRemoteConfigOnChannel 的增强实现,多了channel回调
-//  @receiver v
-//  @param receiver
-//  @return error
+//
+//	@receiver v
+//	@param receiver
+//	@return error
 func (v *Viper) WatchRemoteConfigWithChannel(receiver chan struct{}) error {
 	return v.watchKeyValueConfigWithChannel(receiver)
 }
@@ -1967,7 +1968,8 @@ func (v *Viper) watchKeyValueConfigOnChannel() error {
 }
 
 // watchKeyValueConfigWithChannel Retrieve the first found remote configuration.
-//  比 watchKeyValueConfigOnChannel 多了channel回调
+//
+//	比 watchKeyValueConfigOnChannel 多了channel回调
 func (v *Viper) watchKeyValueConfigWithChannel(reciver chan struct{}) error {
 	if len(v.remoteProviders) == 0 {
 		return RemoteConfigError("No Remote Providers")
