@@ -1,10 +1,11 @@
 module github.com/spf13/viper
 
-go 1.17
+go 1.19
 
 require (
 	github.com/fsnotify/fsnotify v1.5.4
 	github.com/hashicorp/hcl v1.0.0
+	github.com/imdario/mergo v0.3.13
 	github.com/magiconair/properties v1.8.6
 	github.com/mitchellh/mapstructure v1.5.0
 	github.com/pelletier/go-toml v1.9.5

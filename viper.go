@@ -34,6 +34,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/imdario/mergo"
+
 	"github.com/fsnotify/fsnotify"
 	"github.com/mitchellh/mapstructure"
 	"github.com/spf13/afero"
@@ -1927,8 +1929,11 @@ func (v *Viper) getKeyValueConfig() error {
 		}
 		found = true
 		// 允许多个远程文件合并
-		for k, v_ := range val {
-			v.kvstore[k] = v_
+		if err = mergo.Merge(&v.kvstore, val, mergo.WithOverride); err != nil {
+			v.logger.Error(fmt.Errorf("get remote config merge error: %w", err).Error())
+			for k, v_ := range val {
+				v.kvstore[k] = v_
+			}
 		}
 	}
 	if found {
@@ -1942,8 +1947,9 @@ func (v *Viper) getRemoteConfig(provider RemoteProvider) (map[string]interface{}
 	if err != nil {
 		return nil, err
 	}
-	err = v.unmarshalReader(reader, v.kvstore)
-	return v.kvstore, err
+	val := map[string]any{}
+	err = v.unmarshalReader(reader, val)
+	return val, err
 }
 
 // Retrieve the first found remote configuration.
@@ -1985,7 +1991,19 @@ func (v *Viper) watchKeyValueConfigWithChannel(reciver chan struct{}) error {
 					continue
 				}
 				reader := bytes.NewReader(b.Value)
-				v.unmarshalReader(reader, v.kvstore)
+				val := map[string]any{}
+				err := v.unmarshalReader(reader, val)
+				if err != nil {
+					v.logger.Error(fmt.Errorf("viper watchKeyValueConfigWithChannel watch remote config: %w", err).Error())
+					continue
+				}
+				// 允许多个远程文件合并
+				if err = mergo.Merge(&v.kvstore, val, mergo.WithOverride); err != nil {
+					v.logger.Error(fmt.Errorf("viper watchKeyValueConfigWithChannel merge error: %w", err).Error())
+					for k, v_ := range val {
+						v.kvstore[k] = v_
+					}
+				}
 				reciver <- struct{}{}
 			}
 		}(respc)
