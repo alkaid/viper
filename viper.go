@@ -1900,12 +1900,12 @@ func (v *Viper) WatchRemoteConfigOnChannel() error {
 	return v.watchKeyValueConfigOnChannel()
 }
 
-// WatchRemoteConfigWithChannel WatchRemoteConfigOnChannel 的增强实现,多了channel回调
+// WatchRemoteConfigWithChannel WatchRemoteConfigOnChannel 的增强实现,多了channel回调以及退出信号
 //
 //	@receiver v
 //	@param receiver
 //	@return error
-func (v *Viper) WatchRemoteConfigWithChannel(receiver chan struct{}) error {
+func (v *Viper) WatchRemoteConfigWithChannel(receiver chan struct{}) (chan bool, error) {
 	return v.watchKeyValueConfigWithChannel(receiver)
 }
 
@@ -1976,44 +1976,50 @@ func (v *Viper) watchKeyValueConfigOnChannel() error {
 // watchKeyValueConfigWithChannel Retrieve the first found remote configuration.
 //
 //	比 watchKeyValueConfigOnChannel 多了channel回调
-func (v *Viper) watchKeyValueConfigWithChannel(reciver chan struct{}) error {
+func (v *Viper) watchKeyValueConfigWithChannel(reciver chan struct{}) (chan bool, error) {
 	if len(v.remoteProviders) == 0 {
-		return RemoteConfigError("No Remote Providers")
+		return nil, RemoteConfigError("No Remote Providers")
 	}
+	quitwc := make(chan bool)
 	for _, rp := range v.remoteProviders {
-		respc, _ := RemoteConfig.WatchChannel(rp)
-		// Todo: Add quit channel
-		go func(rc <-chan *RemoteResponse) {
+		respc, quit := RemoteConfig.WatchChannel(rp)
+		// 去掉todo 已经加上quit channel
+		go func(rc <-chan *RemoteResponse, quitwc <-chan bool, quit chan<- bool) {
 			for {
-				b := <-rc
-				if b.Error != nil {
-					v.logger.Error(fmt.Errorf("viper watchKeyValueConfigWithChannel watch remote config: %w", b.Error).Error())
-					continue
-				}
-				reader := bytes.NewReader(b.Value)
-				val := map[string]any{}
-				err := v.unmarshalReader(reader, val)
-				if err != nil {
-					v.logger.Error(fmt.Errorf("viper watchKeyValueConfigWithChannel watch remote config: %w", err).Error())
-					continue
-				}
-				// 允许多个远程文件合并
-				if err = mergo.Merge(&v.kvstore, val, mergo.WithOverride); err != nil {
-					v.logger.Error(fmt.Errorf("viper watchKeyValueConfigWithChannel merge error: %w", err).Error())
-					for k, v_ := range val {
-						v.kvstore[k] = v_
+				select {
+				case <-quitwc:
+					quit <- true
+					return
+				case b := <-rc:
+					if b.Error != nil {
+						v.logger.Error(fmt.Errorf("viper watchKeyValueConfigWithChannel watch remote config: %w", b.Error).Error())
+						continue
 					}
+					reader := bytes.NewReader(b.Value)
+					val := map[string]any{}
+					err := v.unmarshalReader(reader, val)
+					if err != nil {
+						v.logger.Error(fmt.Errorf("viper watchKeyValueConfigWithChannel watch remote config: %w", err).Error())
+						continue
+					}
+					// 允许多个远程文件合并
+					if err = mergo.Merge(&v.kvstore, val, mergo.WithOverride); err != nil {
+						v.logger.Error(fmt.Errorf("viper watchKeyValueConfigWithChannel merge error: %w", err).Error())
+						for k, v_ := range val {
+							v.kvstore[k] = v_
+						}
+					}
+					reciver <- struct{}{}
 				}
-				reciver <- struct{}{}
 			}
-		}(respc)
+		}(respc, quitwc, quit)
 		// 官方bug 造成只监听一个 provider
 		// return nil
 	}
 	if len(v.remoteProviders) > 0 {
-		return nil
+		return quitwc, nil
 	}
-	return RemoteConfigError("No Files Found")
+	return nil, RemoteConfigError("No Files Found")
 }
 
 // Retrieve the first found remote configuration.
