@@ -1888,7 +1888,10 @@ func mergeMaps(
 func ReadRemoteConfig() error { return v.ReadRemoteConfig() }
 
 func (v *Viper) ReadRemoteConfig() error {
-	return v.getKeyValueConfig()
+	return v.getKeyValueConfig(false)
+}
+func (v *Viper) ReadRemoteConfigWithMerged(merged bool) error {
+	return v.getKeyValueConfig(merged)
 }
 
 func WatchRemoteConfig() error { return v.WatchRemoteConfig() }
@@ -1905,12 +1908,12 @@ func (v *Viper) WatchRemoteConfigOnChannel() error {
 //	@receiver v
 //	@param receiver
 //	@return error
-func (v *Viper) WatchRemoteConfigWithChannel(receiver chan struct{}) (chan bool, error) {
-	return v.watchKeyValueConfigWithChannel(receiver)
+func (v *Viper) WatchRemoteConfigWithChannel(receiver chan struct{}, merged bool) (chan bool, error) {
+	return v.watchKeyValueConfigWithChannel(receiver, merged)
 }
 
 // Retrieve the first found remote configuration.
-func (v *Viper) getKeyValueConfig() error {
+func (v *Viper) getKeyValueConfig(deepMerge bool) error {
 	if RemoteConfig == nil {
 		return RemoteConfigError("Enable the remote features by doing a blank import of the viper/remote package: '_ github.com/spf13/viper/remote'")
 	}
@@ -1929,8 +1932,16 @@ func (v *Viper) getKeyValueConfig() error {
 		}
 		found = true
 		// 允许多个远程文件合并
-		if err = mergo.Merge(&v.kvstore, val, mergo.WithOverride); err != nil {
-			v.logger.Error(fmt.Errorf("get remote config merge error: %w", err).Error())
+		if deepMerge {
+			// 允许深度合并
+			if err = mergo.Merge(&v.kvstore, val, mergo.WithOverride); err != nil {
+				v.logger.Error(fmt.Errorf("get remote config merge error: %w", err).Error())
+				for k, v_ := range val {
+					v.kvstore[k] = v_
+				}
+			}
+		} else {
+			// 只合并第一层
 			for k, v_ := range val {
 				v.kvstore[k] = v_
 			}
@@ -1976,7 +1987,7 @@ func (v *Viper) watchKeyValueConfigOnChannel() error {
 // watchKeyValueConfigWithChannel Retrieve the first found remote configuration.
 //
 //	比 watchKeyValueConfigOnChannel 多了channel回调
-func (v *Viper) watchKeyValueConfigWithChannel(reciver chan struct{}) (chan bool, error) {
+func (v *Viper) watchKeyValueConfigWithChannel(reciver chan struct{}, deepMerge bool) (chan bool, error) {
 	if len(v.remoteProviders) == 0 {
 		return nil, RemoteConfigError("No Remote Providers")
 	}
@@ -2003,8 +2014,16 @@ func (v *Viper) watchKeyValueConfigWithChannel(reciver chan struct{}) (chan bool
 						continue
 					}
 					// 允许多个远程文件合并
-					if err = mergo.Merge(&v.kvstore, val, mergo.WithOverride); err != nil {
-						v.logger.Error(fmt.Errorf("viper watchKeyValueConfigWithChannel merge error: %w", err).Error())
+					if deepMerge {
+						// 允许深度合并
+						if err = mergo.Merge(&v.kvstore, val, mergo.WithOverride); err != nil {
+							v.logger.Error(fmt.Errorf("viper watchKeyValueConfigWithChannel merge error: %w", err).Error())
+							for k, v_ := range val {
+								v.kvstore[k] = v_
+							}
+						}
+					} else {
+						// 只合并第一层
 						for k, v_ := range val {
 							v.kvstore[k] = v_
 						}
