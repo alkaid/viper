@@ -11,7 +11,7 @@ import (
 	"io"
 	"os"
 
-	crypt "github.com/sagikazarmark/crypt/config"
+	crypt "github.com/alkaid/crypt/config"
 
 	"github.com/spf13/viper"
 )
@@ -58,11 +58,18 @@ func (rc remoteConfigProvider) WatchChannel(rp viper.RemoteProvider) (<-chan *vi
 			select {
 			case <-quitwc:
 				quit <- true
-				return
-			case resp := <-cr:
+				break
+			case resp, ok := <-cr:
+				if !ok {
+					close(vr)
+					break
+				}
 				vr <- &viper.RemoteResponse{
 					Error: resp.Error,
 					Value: resp.Value,
+				}
+				if resp.Error != nil {
+					break
 				}
 			}
 		}

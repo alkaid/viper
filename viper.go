@@ -21,6 +21,7 @@ package viper
 
 import (
 	"bytes"
+	"context"
 	"encoding/csv"
 	"errors"
 	"fmt"
@@ -1903,13 +1904,15 @@ func (v *Viper) WatchRemoteConfigOnChannel() error {
 	return v.watchKeyValueConfigOnChannel()
 }
 
-// WatchRemoteConfigWithChannel WatchRemoteConfigOnChannel 的增强实现,多了channel回调以及退出信号
+// WatchRemoteConfigWithChannel WatchRemoteConfigOnChannel 的增强实现,多了channel回调
 //
 //	@receiver v
+//	@param ctx 要取消请传入 context.WithCancel
 //	@param receiver
+//	@param deepMerge
 //	@return error
-func (v *Viper) WatchRemoteConfigWithChannel(receiver chan struct{}, merged bool) (chan bool, error) {
-	return v.watchKeyValueConfigWithChannel(receiver, merged)
+func (v *Viper) WatchRemoteConfigWithChannel(ctx context.Context, receiver chan *RemoteResponse, deepMerge bool) error {
+	return v.watchKeyValueConfigWithChannel(ctx, receiver, deepMerge)
 }
 
 // Retrieve the first found remote configuration.
@@ -1974,7 +1977,14 @@ func (v *Viper) watchKeyValueConfigOnChannel() error {
 		// Todo: Add quit channel
 		go func(rc <-chan *RemoteResponse) {
 			for {
-				b := <-rc
+				b, ok := <-rc
+				if !ok {
+					break
+				}
+				if b.Error != nil {
+					v.logger.Error(fmt.Errorf("viper watchKeyValueConfigWithChannel watch remote config: %w", b.Error).Error())
+					break
+				}
 				reader := bytes.NewReader(b.Value)
 				v.unmarshalReader(reader, v.kvstore)
 			}
@@ -1987,24 +1997,27 @@ func (v *Viper) watchKeyValueConfigOnChannel() error {
 // watchKeyValueConfigWithChannel Retrieve the first found remote configuration.
 //
 //	比 watchKeyValueConfigOnChannel 多了channel回调
-func (v *Viper) watchKeyValueConfigWithChannel(reciver chan struct{}, deepMerge bool) (chan bool, error) {
+func (v *Viper) watchKeyValueConfigWithChannel(ctx context.Context, receiver chan *RemoteResponse, deepMerge bool) error {
 	if len(v.remoteProviders) == 0 {
-		return nil, RemoteConfigError("No Remote Providers")
+		return RemoteConfigError("No Remote Providers")
 	}
-	quitwc := make(chan bool)
 	for _, rp := range v.remoteProviders {
 		respc, quit := RemoteConfig.WatchChannel(rp)
 		// 去掉todo 已经加上quit channel
-		go func(rc <-chan *RemoteResponse, quitwc <-chan bool, quit chan<- bool) {
+		go func(rc <-chan *RemoteResponse, quit chan<- bool) {
 			for {
 				select {
-				case <-quitwc:
+				case <-ctx.Done():
 					quit <- true
-					return
-				case b := <-rc:
+					break
+				case b, ok := <-rc:
+					if !ok {
+						break
+					}
 					if b.Error != nil {
 						v.logger.Error(fmt.Errorf("viper watchKeyValueConfigWithChannel watch remote config: %w", b.Error).Error())
-						continue
+						receiver <- b
+						break
 					}
 					reader := bytes.NewReader(b.Value)
 					val := map[string]any{}
@@ -2028,17 +2041,17 @@ func (v *Viper) watchKeyValueConfigWithChannel(reciver chan struct{}, deepMerge 
 							v.kvstore[k] = v_
 						}
 					}
-					reciver <- struct{}{}
+					receiver <- b
 				}
 			}
-		}(respc, quitwc, quit)
+		}(respc, quit)
 		// 官方bug 造成只监听一个 provider
 		// return nil
 	}
 	if len(v.remoteProviders) > 0 {
-		return quitwc, nil
+		return nil
 	}
-	return nil, RemoteConfigError("No Files Found")
+	return RemoteConfigError("No Files Found")
 }
 
 // Retrieve the first found remote configuration.
