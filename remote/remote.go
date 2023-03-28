@@ -11,7 +11,7 @@ import (
 	"io"
 	"os"
 
-	crypt "github.com/sagikazarmark/crypt/config"
+	crypt "github.com/alkaid/crypt/config"
 
 	"github.com/spf13/viper"
 )
@@ -54,15 +54,26 @@ func (rc remoteConfigProvider) WatchChannel(rp viper.RemoteProvider) (<-chan *vi
 	cryptoResponseCh := cm.Watch(rp.Path(), quit)
 	// need this function to convert the Channel response form crypt.Response to viper.Response
 	go func(cr <-chan *crypt.Response, vr chan<- *viper.RemoteResponse, quitwc <-chan bool, quit chan<- bool) {
+		defer func() {
+			// 关闭quit避免crypt库里goroutine泄漏,TODO 更好的方式是使用传入CancelContext来控制退出,这里受限于接口定义,不好改动
+			close(quit)
+			close(vr)
+		}()
 		for {
 			select {
 			case <-quitwc:
 				quit <- true
 				return
-			case resp := <-cr:
+			case resp, ok := <-cr:
+				if !ok {
+					return
+				}
 				vr <- &viper.RemoteResponse{
 					Error: resp.Error,
 					Value: resp.Value,
+				}
+				if resp.Error != nil {
+					return
 				}
 			}
 		}
