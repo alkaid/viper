@@ -5,9 +5,11 @@ import (
 
 	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBindFlagValueSet(t *testing.T) {
+	Reset()
 	flagSet := pflag.NewFlagSet("test", pflag.ContinueOnError)
 
 	testValues := map[string]*string{
@@ -29,9 +31,7 @@ func TestBindFlagValueSet(t *testing.T) {
 	flagValueSet := pflagValueSet{flagSet}
 
 	err := BindFlagValues(flagValueSet)
-	if err != nil {
-		t.Fatalf("error binding flag set, %v", err)
-	}
+	require.NoError(t, err, "error binding flag set")
 
 	flagSet.VisitAll(func(flag *pflag.Flag) {
 		flag.Value.Set(mutatedTestValues[flag.Name])
@@ -39,7 +39,7 @@ func TestBindFlagValueSet(t *testing.T) {
 	})
 
 	for name, expected := range mutatedTestValues {
-		assert.Equal(t, Get(name), expected)
+		assert.Equal(t, expected, Get(name))
 	}
 }
 

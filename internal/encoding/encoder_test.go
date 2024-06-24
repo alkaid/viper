@@ -2,13 +2,16 @@ package encoding
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type encoder struct {
 	b []byte
 }
 
-func (e encoder) Encode(_ map[string]interface{}) ([]byte, error) {
+func (e encoder) Encode(_ map[string]any) ([]byte, error) {
 	return e.b, nil
 }
 
@@ -17,23 +20,17 @@ func TestEncoderRegistry_RegisterEncoder(t *testing.T) {
 		registry := NewEncoderRegistry()
 
 		err := registry.RegisterEncoder("myformat", encoder{})
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 	})
 
 	t.Run("AlreadyRegistered", func(t *testing.T) {
 		registry := NewEncoderRegistry()
 
 		err := registry.RegisterEncoder("myformat", encoder{})
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 
 		err = registry.RegisterEncoder("myformat", encoder{})
-		if err != ErrEncoderFormatAlreadyRegistered {
-			t.Fatalf("expected ErrEncoderFormatAlreadyRegistered, got: %v", err)
-		}
+		assert.ErrorIs(t, err, ErrEncoderFormatAlreadyRegistered)
 	})
 }
 
@@ -45,26 +42,18 @@ func TestEncoderRegistry_Decode(t *testing.T) {
 		}
 
 		err := registry.RegisterEncoder("myformat", encoder)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 
-		b, err := registry.Encode("myformat", map[string]interface{}{"key": "value"})
-		if err != nil {
-			t.Fatal(err)
-		}
+		b, err := registry.Encode("myformat", map[string]any{"key": "value"})
+		require.NoError(t, err)
 
-		if string(b) != "key: value" {
-			t.Fatalf("expected 'key: value', got: %#v", string(b))
-		}
+		assert.Equal(t, "key: value", string(b))
 	})
 
 	t.Run("EncoderNotFound", func(t *testing.T) {
 		registry := NewEncoderRegistry()
 
-		_, err := registry.Encode("myformat", map[string]interface{}{"key": "value"})
-		if err != ErrEncoderNotFound {
-			t.Fatalf("expected ErrEncoderNotFound, got: %v", err)
-		}
+		_, err := registry.Encode("myformat", map[string]any{"key": "value"})
+		assert.ErrorIs(t, err, ErrEncoderNotFound)
 	})
 }

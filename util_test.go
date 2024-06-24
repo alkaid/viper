@@ -13,24 +13,24 @@ package viper
 import (
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 
-	"github.com/spf13/viper/internal/testutil"
+	slog "github.com/sagikazarmark/slog-shim"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestCopyAndInsensitiviseMap(t *testing.T) {
 	var (
-		given = map[string]interface{}{
+		given = map[string]any{
 			"Foo": 32,
-			"Bar": map[interface{}]interface{}{
+			"Bar": map[any]any{
 				"ABc": "A",
 				"cDE": "B",
 			},
 		}
-		expected = map[string]interface{}{
+		expected = map[string]any{
 			"foo": 32,
-			"bar": map[string]interface{}{
+			"bar": map[string]any{
 				"abc": "A",
 				"cde": "B",
 			},
@@ -39,22 +39,15 @@ func TestCopyAndInsensitiviseMap(t *testing.T) {
 
 	got := copyAndInsensitiviseMap(given)
 
-	if !reflect.DeepEqual(got, expected) {
-		t.Fatalf("Got %q\nexpected\n%q", got, expected)
-	}
+	assert.Equal(t, expected, got)
+	_, ok := given["foo"]
+	assert.False(t, ok)
+	_, ok = given["bar"]
+	assert.False(t, ok)
 
-	if _, ok := given["foo"]; ok {
-		t.Fatal("Input map changed")
-	}
-
-	if _, ok := given["bar"]; ok {
-		t.Fatal("Input map changed")
-	}
-
-	m := given["Bar"].(map[interface{}]interface{})
-	if _, ok := m["ABc"]; !ok {
-		t.Fatal("Input map changed")
-	}
+	m := given["Bar"].(map[any]any)
+	_, ok = m["ABc"]
+	assert.True(t, ok)
 }
 
 func TestAbsPathify(t *testing.T) {
@@ -64,8 +57,8 @@ func TestAbsPathify(t *testing.T) {
 	homer := filepath.Join(home, "homer")
 	wd, _ := os.Getwd()
 
-	testutil.Setenv(t, "HOMER_ABSOLUTE_PATH", homer)
-	testutil.Setenv(t, "VAR_WITH_RELATIVE_PATH", "relative")
+	t.Setenv("HOMER_ABSOLUTE_PATH", homer)
+	t.Setenv("VAR_WITH_RELATIVE_PATH", "relative")
 
 	tests := []struct {
 		input  string
@@ -87,9 +80,7 @@ func TestAbsPathify(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		got := absPathify(jwwLogger{}, test.input)
-		if got != test.output {
-			t.Errorf("Got %v\nexpected\n%q", got, test.output)
-		}
+		got := absPathify(slog.Default(), test.input)
+		assert.Equal(t, test.output, got)
 	}
 }

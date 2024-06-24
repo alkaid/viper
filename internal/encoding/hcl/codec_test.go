@@ -1,11 +1,13 @@
 package hcl
 
 import (
-	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// original form of the data
+// original form of the data.
 const original = `# key-value pair
 "key" = "value"
 
@@ -26,7 +28,7 @@ nested map
   "list" = ["item1", "item2", "item3"]
 }`
 
-// encoded form of the data
+// encoded form of the data.
 const encoded = `"key" = "value"
 
 "list" = ["item1", "item2", "item3"]
@@ -41,28 +43,28 @@ const encoded = `"key" = "value"
   "list" = ["item1", "item2", "item3"]
 }`
 
-// decoded form of the data
+// decoded form of the data.
 //
-// in case of HCL it's slightly different from Viper's internal representation
-// (eg. map is decoded into a list of maps)
-var decoded = map[string]interface{}{
+// In case of HCL it's slightly different from Viper's internal representation
+// (e.g. map is decoded into a list of maps).
+var decoded = map[string]any{
 	"key": "value",
-	"list": []interface{}{
+	"list": []any{
 		"item1",
 		"item2",
 		"item3",
 	},
-	"map": []map[string]interface{}{
+	"map": []map[string]any{
 		{
 			"key": "value",
 		},
 	},
-	"nested_map": []map[string]interface{}{
+	"nested_map": []map[string]any{
 		{
-			"map": []map[string]interface{}{
+			"map": []map[string]any{
 				{
 					"key": "value",
-					"list": []interface{}{
+					"list": []any{
 						"item1",
 						"item2",
 						"item3",
@@ -73,21 +75,21 @@ var decoded = map[string]interface{}{
 	},
 }
 
-// Viper's internal representation
-var data = map[string]interface{}{
+// data is Viper's internal representation.
+var data = map[string]any{
 	"key": "value",
-	"list": []interface{}{
+	"list": []any{
 		"item1",
 		"item2",
 		"item3",
 	},
-	"map": map[string]interface{}{
+	"map": map[string]any{
 		"key": "value",
 	},
-	"nested_map": map[string]interface{}{
-		"map": map[string]interface{}{
+	"nested_map": map[string]any{
+		"map": map[string]any{
 			"key": "value",
-			"list": []interface{}{
+			"list": []any{
 				"item1",
 				"item2",
 				"item3",
@@ -100,40 +102,30 @@ func TestCodec_Encode(t *testing.T) {
 	codec := Codec{}
 
 	b, err := codec.Encode(data)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
-	if encoded != string(b) {
-		t.Fatalf("decoded value does not match the expected one\nactual:   %#v\nexpected: %#v", string(b), encoded)
-	}
+	assert.Equal(t, encoded, string(b))
 }
 
 func TestCodec_Decode(t *testing.T) {
 	t.Run("OK", func(t *testing.T) {
 		codec := Codec{}
 
-		v := map[string]interface{}{}
+		v := map[string]any{}
 
 		err := codec.Decode([]byte(original), v)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 
-		if !reflect.DeepEqual(decoded, v) {
-			t.Fatalf("decoded value does not match the expected one\nactual:   %#v\nexpected: %#v", v, decoded)
-		}
+		assert.Equal(t, decoded, v)
 	})
 
 	t.Run("InvalidData", func(t *testing.T) {
 		codec := Codec{}
 
-		v := map[string]interface{}{}
+		v := map[string]any{}
 
 		err := codec.Decode([]byte(`invalid data`), v)
-		if err == nil {
-			t.Fatal("expected decoding to fail")
-		}
+		require.Error(t, err)
 
 		t.Logf("decoding failed as expected: %s", err)
 	})
