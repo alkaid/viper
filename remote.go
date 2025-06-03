@@ -2,6 +2,8 @@ package viper
 
 import (
 	"bytes"
+	"context"
+	"dario.cat/mergo"
 	"fmt"
 	"io"
 	"reflect"
@@ -50,6 +52,7 @@ func (rce RemoteConfigError) Error() string {
 type defaultRemoteProvider struct {
 	provider      string
 	endpoint      string
+	endpoints     []string
 	path          string
 	secretKeyring string
 }
@@ -60,6 +63,10 @@ func (rp defaultRemoteProvider) Provider() string {
 
 func (rp defaultRemoteProvider) Endpoint() string {
 	return rp.endpoint
+}
+
+func (rp defaultRemoteProvider) Endpoints() []string {
+	return rp.endpoints
 }
 
 func (rp defaultRemoteProvider) Path() string {
@@ -77,6 +84,7 @@ func (rp defaultRemoteProvider) SecretKeyring() string {
 type RemoteProvider interface {
 	Provider() string
 	Endpoint() string
+	Endpoints() []string
 	Path() string
 	SecretKeyring() string
 }
@@ -104,6 +112,25 @@ func (v *Viper) AddRemoteProvider(provider, endpoint, path string) error {
 			endpoint: endpoint,
 			provider: provider,
 			path:     path,
+		}
+		if !v.providerPathExists(rp) {
+			v.remoteProviders = append(v.remoteProviders, rp)
+		}
+	}
+	return nil
+}
+
+func (v *Viper) AddRemoteProviderCluster(provider string, endpoints []string, path string) error {
+	if !slices.Contains(SupportedRemoteProviders, provider) {
+		return UnsupportedRemoteProviderError(provider)
+	}
+	if provider != "" && len(endpoints) != 0 {
+		v.logger.Info("adding remote provider", "provider", provider, "endpoints", endpoints)
+
+		rp := &defaultRemoteProvider{
+			endpoints: endpoints,
+			provider:  provider,
+			path:      path,
 		}
 		if !v.providerPathExists(rp) {
 			v.remoteProviders = append(v.remoteProviders, rp)
@@ -157,10 +184,18 @@ func (v *Viper) providerPathExists(p *defaultRemoteProvider) bool {
 
 // ReadRemoteConfig attempts to get configuration from a remote source
 // and read it in the remote configuration registry.
-func ReadRemoteConfig() error { return v.ReadRemoteConfig() }
+func ReadRemoteConfig() error {
+	return v.getKeyValueConfig(false)
+}
+func ReadRemoteConfigWithMerged(merged bool) error {
+	return v.getKeyValueConfig(merged)
+}
 
 func (v *Viper) ReadRemoteConfig() error {
-	return v.getKeyValueConfig()
+	return v.getKeyValueConfig(false)
+}
+func (v *Viper) ReadRemoteConfigWithMerged(merged bool) error {
+	return v.getKeyValueConfig(merged)
 }
 
 func WatchRemoteConfig() error { return v.WatchRemoteConfig() }
@@ -172,8 +207,19 @@ func (v *Viper) WatchRemoteConfigOnChannel() error {
 	return v.watchKeyValueConfigOnChannel()
 }
 
+// WatchRemoteConfigWithChannel WatchRemoteConfigOnChannel 的增强实现,多了channel回调
+//
+//	@receiver v
+//	@param ctx 要取消请传入 context.WithCancel
+//	@param receiver
+//	@param deepMerge
+//	@return error
+func (v *Viper) WatchRemoteConfigWithChannel(ctx context.Context, receiver chan *RemoteResponse, deepMerge bool) error {
+	return v.watchKeyValueConfigWithChannel(ctx, receiver, deepMerge)
+}
+
 // Retrieve the first found remote configuration.
-func (v *Viper) getKeyValueConfig() error {
+func (v *Viper) getKeyValueConfig(deepMerge bool) error {
 	if RemoteConfig == nil {
 		return RemoteConfigError("Enable the remote features by doing a blank import of the viper/remote package: '_ github.com/spf13/viper/remote'")
 	}
@@ -182,6 +228,7 @@ func (v *Viper) getKeyValueConfig() error {
 		return RemoteConfigError("No Remote Providers")
 	}
 
+	var found = false
 	for _, rp := range v.remoteProviders {
 		val, err := v.getRemoteConfig(rp)
 		if err != nil {
@@ -189,9 +236,24 @@ func (v *Viper) getKeyValueConfig() error {
 
 			continue
 		}
-
-		v.kvstore = val
-
+		found = true
+		// 允许多个远程文件合并
+		if deepMerge {
+			// 允许深度合并
+			if err = mergo.Merge(&v.kvstore, val, mergo.WithOverride); err != nil {
+				v.logger.Error(fmt.Errorf("get remote config merge error: %w", err).Error())
+				for k, v_ := range val {
+					v.kvstore[k] = v_
+				}
+			}
+		} else {
+			// 只合并第一层
+			for k, v_ := range val {
+				v.kvstore[k] = v_
+			}
+		}
+	}
+	if found {
 		return nil
 	}
 	return RemoteConfigError("No Files Found")
@@ -202,8 +264,9 @@ func (v *Viper) getRemoteConfig(provider RemoteProvider) (map[string]any, error)
 	if err != nil {
 		return nil, err
 	}
-	err = v.unmarshalReader(reader, v.kvstore)
-	return v.kvstore, err
+	val := map[string]any{}
+	err = v.unmarshalReader(reader, val)
+	return val, err
 }
 
 // Retrieve the first found remote configuration.
@@ -217,11 +280,81 @@ func (v *Viper) watchKeyValueConfigOnChannel() error {
 		// Todo: Add quit channel
 		go func(rc <-chan *RemoteResponse) {
 			for {
-				b := <-rc
+				b, ok := <-rc
+				// 校验异常
+				if !ok {
+					break
+				}
+				if b.Error != nil {
+					v.logger.Error(fmt.Errorf("viper watchKeyValueConfigWithChannel watch remote config: %w", b.Error).Error())
+					break
+				}
 				reader := bytes.NewReader(b.Value)
 				v.unmarshalReader(reader, v.kvstore)
 			}
 		}(respc)
+		return nil
+	}
+	return RemoteConfigError("No Files Found")
+}
+
+// watchKeyValueConfigWithChannel Retrieve the first found remote configuration.
+//
+//	比 watchKeyValueConfigOnChannel 多了channel回调
+func (v *Viper) watchKeyValueConfigWithChannel(ctx context.Context, receiver chan *RemoteResponse, deepMerge bool) error {
+	if len(v.remoteProviders) == 0 {
+		return RemoteConfigError("No Remote Providers")
+	}
+	for _, rp := range v.remoteProviders {
+		respc, quit := RemoteConfig.WatchChannel(rp)
+		// 去掉todo 已经加上quit channel
+		go func(rc <-chan *RemoteResponse, quit chan<- bool) {
+			// 关闭quit避免crypt库里goroutine泄漏,TODO 更好的方式是使用传入CancelContext来控制退出,这里受限于接口定义,不好改动
+			defer close(quit)
+			for {
+				select {
+				case <-ctx.Done():
+					quit <- true
+					return
+				case b, ok := <-rc:
+					if !ok {
+						return
+					}
+					if b.Error != nil {
+						v.logger.Error(fmt.Errorf("viper watchKeyValueConfigWithChannel watch remote config: %w", b.Error).Error())
+						receiver <- b
+						return
+					}
+					reader := bytes.NewReader(b.Value)
+					val := map[string]any{}
+					err := v.unmarshalReader(reader, val)
+					if err != nil {
+						v.logger.Error(fmt.Errorf("viper watchKeyValueConfigWithChannel watch remote config: %w", err).Error())
+						continue
+					}
+					// 允许多个远程文件合并
+					if deepMerge {
+						// 允许深度合并
+						if err = mergo.Merge(&v.kvstore, val, mergo.WithOverride); err != nil {
+							v.logger.Error(fmt.Errorf("viper watchKeyValueConfigWithChannel merge error: %w", err).Error())
+							for k, v_ := range val {
+								v.kvstore[k] = v_
+							}
+						}
+					} else {
+						// 只合并第一层
+						for k, v_ := range val {
+							v.kvstore[k] = v_
+						}
+					}
+					receiver <- b
+				}
+			}
+		}(respc, quit)
+		// 官方bug 造成只监听一个 provider
+		// return nil
+	}
+	if len(v.remoteProviders) > 0 {
 		return nil
 	}
 	return RemoteConfigError("No Files Found")
