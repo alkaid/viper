@@ -21,14 +21,14 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/mitchellh/mapstructure"
+	"github.com/go-viper/mapstructure/v2"
+	"github.com/sagikazarmark/locafero"
 	"github.com/spf13/afero"
 	"github.com/spf13/cast"
 	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/spf13/viper/internal/features"
 	"github.com/spf13/viper/internal/testutil"
 )
 
@@ -84,57 +84,11 @@ var jsonExample = []byte(`{
     }
 }`)
 
-var hclExample = []byte(`
-id = "0001"
-type = "donut"
-name = "Cake"
-ppu = 0.55
-foos {
-	foo {
-		key = 1
-	}
-	foo {
-		key = 2
-	}
-	foo {
-		key = 3
-	}
-	foo {
-		key = 4
-	}
-}`)
-
-var propertiesExample = []byte(`
-p_id: 0001
-p_type: donut
-p_name: Cake
-p_ppu: 0.55
-p_batters.batter.type: Regular
-`)
-
 var remoteExample = []byte(`{
 "id":"0002",
 "type":"cronut",
 "newkey":"remote"
 }`)
-
-var iniExample = []byte(`; Package name
-NAME        = ini
-; Package version
-VERSION     = v1
-; Package import path
-IMPORT_PATH = gopkg.in/%(NAME)s.%(VERSION)s
-
-# Information about package author
-# Bio can be written in multiple lines.
-[author]
-NAME   = Unknown  ; Succeeding comment
-E-MAIL = fake@localhost
-GITHUB = https://github.com/%(NAME)s
-BIO    = """Gopher.
-Coding addict.
-Good man.
-"""  # Succeeding comment`)
 
 func initConfigs(v *Viper) {
 	var r io.Reader
@@ -144,14 +98,6 @@ func initConfigs(v *Viper) {
 
 	v.SetConfigType("json")
 	r = bytes.NewReader(jsonExample)
-	v.unmarshalReader(r, v.config)
-
-	v.SetConfigType("hcl")
-	r = bytes.NewReader(hclExample)
-	v.unmarshalReader(r, v.config)
-
-	v.SetConfigType("properties")
-	r = bytes.NewReader(propertiesExample)
 	v.unmarshalReader(r, v.config)
 
 	v.SetConfigType("toml")
@@ -165,10 +111,6 @@ func initConfigs(v *Viper) {
 	v.SetConfigType("json")
 	remote := bytes.NewReader(remoteExample)
 	v.unmarshalReader(remote, v.kvstore)
-
-	v.SetConfigType("ini")
-	r = bytes.NewReader(iniExample)
-	v.unmarshalReader(r, v.config)
 }
 
 func initConfig(typ, config string, v *Viper) {
@@ -363,6 +305,54 @@ func TestGetConfigFile(t *testing.T) {
 		// are not considered
 		assert.Error(t, err)
 	})
+
+	t.Run("experimental finder", func(t *testing.T) {
+		fs := afero.NewMemMapFs()
+
+		err := fs.Mkdir(testutil.AbsFilePath(t, "/etc/viper"), 0o777)
+		require.NoError(t, err)
+
+		_, err = fs.Create(testutil.AbsFilePath(t, "/etc/viper/config.yaml"))
+		require.NoError(t, err)
+
+		v := NewWithOptions(ExperimentalFinder())
+
+		v.SetFs(fs)
+
+		v.AddConfigPath("/etc/viper")
+
+		filename, err := v.getConfigFile()
+		assert.Equal(t, testutil.AbsFilePath(t, "/etc/viper/config.yaml"), testutil.AbsFilePath(t, filename))
+		assert.NoError(t, err)
+	})
+
+	t.Run("finder", func(t *testing.T) {
+		fs := afero.NewMemMapFs()
+
+		err := fs.Mkdir(testutil.AbsFilePath(t, "/etc/viper"), 0o777)
+		require.NoError(t, err)
+
+		_, err = fs.Create(testutil.AbsFilePath(t, "/etc/viper/config.yaml"))
+		require.NoError(t, err)
+
+		finder := locafero.Finder{
+			Paths: []string{testutil.AbsFilePath(t, "/etc/viper")},
+			Names: locafero.NameWithExtensions("config", SupportedExts...),
+			Type:  locafero.FileTypeFile,
+		}
+
+		v := NewWithOptions(WithFinder(finder))
+
+		v.SetFs(fs)
+
+		// These should be ineffective
+		v.AddConfigPath("/etc/something_else")
+		v.SetConfigName("not-config")
+
+		filename, err := v.getConfigFile()
+		assert.Equal(t, testutil.AbsFilePath(t, "/etc/viper/config.yaml"), testutil.AbsFilePath(t, filename))
+		assert.NoError(t, err)
+	})
 }
 
 func TestReadInConfig(t *testing.T) {
@@ -415,6 +405,65 @@ func TestReadInConfig(t *testing.T) {
 
 		assert.Equal(t, "value", v.Get("key"))
 	})
+
+	t.Run("find file with experimental finder", func(t *testing.T) {
+		fs := afero.NewMemMapFs()
+
+		err := fs.Mkdir(testutil.AbsFilePath(t, "/etc/viper"), 0o777)
+		require.NoError(t, err)
+
+		file, err := fs.Create(testutil.AbsFilePath(t, "/etc/viper/config.yaml"))
+		require.NoError(t, err)
+
+		_, err = file.WriteString(`key: value`)
+		require.NoError(t, err)
+
+		file.Close()
+
+		v := NewWithOptions(ExperimentalFinder())
+
+		v.SetFs(fs)
+		v.AddConfigPath("/etc/viper")
+
+		err = v.ReadInConfig()
+		require.NoError(t, err)
+
+		assert.Equal(t, "value", v.Get("key"))
+	})
+
+	t.Run("find file using a finder", func(t *testing.T) {
+		fs := afero.NewMemMapFs()
+
+		err := fs.Mkdir(testutil.AbsFilePath(t, "/etc/viper"), 0o777)
+		require.NoError(t, err)
+
+		file, err := fs.Create(testutil.AbsFilePath(t, "/etc/viper/config.yaml"))
+		require.NoError(t, err)
+
+		_, err = file.WriteString(`key: value`)
+		require.NoError(t, err)
+
+		file.Close()
+
+		finder := locafero.Finder{
+			Paths: []string{testutil.AbsFilePath(t, "/etc/viper")},
+			Names: locafero.NameWithExtensions("config", SupportedExts...),
+			Type:  locafero.FileTypeFile,
+		}
+
+		v := NewWithOptions(WithFinder(finder))
+
+		v.SetFs(fs)
+
+		// These should be ineffective
+		v.AddConfigPath("/etc/something_else")
+		v.SetConfigName("not-config")
+
+		err = v.ReadInConfig()
+		require.NoError(t, err)
+
+		assert.Equal(t, "value", v.Get("key"))
+	})
 }
 
 func TestDefault(t *testing.T) {
@@ -428,7 +477,7 @@ func TestDefault(t *testing.T) {
 	v.SetConfigType("yaml")
 	err := v.ReadConfig(bytes.NewBuffer(yamlExample))
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, "leather", v.Get("clothing.jacket"))
 }
 
@@ -515,22 +564,11 @@ func TestJSON(t *testing.T) {
 	assert.Equal(t, "0001", v.Get("id"))
 }
 
-func TestProperties(t *testing.T) {
-	v := New()
-
-	v.SetConfigType("properties")
-
-	// Read the properties data into Viper configuration
-	require.NoError(t, v.ReadConfig(bytes.NewBuffer(propertiesExample)), "Error reading properties data")
-
-	assert.Equal(t, "0001", v.Get("p_id"))
-}
-
 func TestTOML(t *testing.T) {
 	v := New()
 	v.SetConfigType("toml")
 
-	// Read the properties data into Viper configuration
+	// Read the TOML data into Viper configuration
 	require.NoError(t, v.ReadConfig(bytes.NewBuffer(tomlExample)), "Error reading toml data")
 
 	assert.Equal(t, "TOML Example", v.Get("title"))
@@ -539,42 +577,16 @@ func TestTOML(t *testing.T) {
 func TestDotEnv(t *testing.T) {
 	v := New()
 	v.SetConfigType("env")
-	// Read the properties data into Viper configuration
+	// Read the dotenv data into Viper configuration
 	require.NoError(t, v.ReadConfig(bytes.NewBuffer(dotenvExample)), "Error reading env data")
 
 	assert.Equal(t, "DotEnv Example", v.Get("title_dotenv"))
 }
 
-func TestHCL(t *testing.T) {
-	v := New()
-	v.SetConfigType("hcl")
-	// Read the properties data into Viper configuration
-	require.NoError(t, v.ReadConfig(bytes.NewBuffer(hclExample)), "Error reading hcl data")
-
-	// initHcl()
-	assert.Equal(t, "0001", v.Get("id"))
-	assert.Equal(t, 0.55, v.Get("ppu"))
-	assert.Equal(t, "donut", v.Get("type"))
-	assert.Equal(t, "Cake", v.Get("name"))
-	v.Set("id", "0002")
-	assert.Equal(t, "0002", v.Get("id"))
-	assert.NotEqual(t, "cronut", v.Get("type"))
-}
-
-func TestIni(t *testing.T) {
-	// initIni()
-	v := New()
-	v.SetConfigType("ini")
-	// Read the properties data into Viper configuration
-	require.NoError(t, v.ReadConfig(bytes.NewBuffer(iniExample)), "Error reading ini data")
-
-	assert.Equal(t, "ini", v.Get("default.name"))
-}
-
 func TestRemotePrecedence(t *testing.T) {
 	v := New()
 	v.SetConfigType("json")
-	// Read the properties data into Viper configuration v.config
+	// Read the remote data into Viper configuration v.config
 	require.NoError(t, v.ReadConfig(bytes.NewBuffer(jsonExample)), "Error reading json data")
 
 	assert.Equal(t, "0001", v.Get("id"))
@@ -594,7 +606,7 @@ func TestRemotePrecedence(t *testing.T) {
 func TestEnv(t *testing.T) {
 	v := New()
 	v.SetConfigType("json")
-	// Read the properties data into Viper configuration v.config
+	// Read the JSON data into Viper configuration v.config
 	require.NoError(t, v.ReadConfig(bytes.NewBuffer(jsonExample)), "Error reading json data")
 
 	v.BindEnv("id")
@@ -617,7 +629,7 @@ func TestEnv(t *testing.T) {
 func TestMultipleEnv(t *testing.T) {
 	v := New()
 	v.SetConfigType("json")
-	// Read the properties data into Viper configuration v.config
+	// Read the JSON data into Viper configuration v.config
 	require.NoError(t, v.ReadConfig(bytes.NewBuffer(jsonExample)), "Error reading json data")
 
 	v.BindEnv("f", "FOOD", "OLD_FOOD")
@@ -630,7 +642,7 @@ func TestMultipleEnv(t *testing.T) {
 func TestEmptyEnv(t *testing.T) {
 	v := New()
 	v.SetConfigType("json")
-	// Read the properties data into Viper configuration v.config
+	// Read the JSON data into Viper configuration v.config
 	require.NoError(t, v.ReadConfig(bytes.NewBuffer(jsonExample)), "Error reading json data")
 
 	v.BindEnv("type") // Empty environment variable
@@ -645,7 +657,7 @@ func TestEmptyEnv(t *testing.T) {
 func TestEmptyEnv_Allowed(t *testing.T) {
 	v := New()
 	v.SetConfigType("json")
-	// Read the properties data into Viper configuration v.config
+	// Read the JSON data into Viper configuration v.config
 	require.NoError(t, v.ReadConfig(bytes.NewBuffer(jsonExample)), "Error reading json data")
 
 	v.AllowEmptyEnv(true)
@@ -662,7 +674,7 @@ func TestEmptyEnv_Allowed(t *testing.T) {
 func TestEnvPrefix(t *testing.T) {
 	v := New()
 	v.SetConfigType("json")
-	// Read the properties data into Viper configuration v.config
+	// Read the JSON data into Viper configuration v.config
 	require.NoError(t, v.ReadConfig(bytes.NewBuffer(jsonExample)), "Error reading json data")
 
 	v.SetEnvPrefix("foo") // will be uppercased automatically
@@ -722,7 +734,7 @@ func TestEnvKeyReplacer(t *testing.T) {
 func TestEnvSubConfig(t *testing.T) {
 	v := New()
 	v.SetConfigType("yaml")
-	// Read the properties data into Viper configuration v.config
+	// Read the YAML data into Viper configuration v.config
 	require.NoError(t, v.ReadConfig(bytes.NewBuffer(yamlExample)), "Error reading json data")
 	v.AutomaticEnv()
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
@@ -744,10 +756,6 @@ func TestAllKeys(t *testing.T) {
 
 	ks := []string{
 		"title",
-		"author.bio",
-		"author.e-mail",
-		"author.github",
-		"author.name",
 		"newkey",
 		"owner.organization",
 		"owner.dob",
@@ -759,21 +767,12 @@ func TestAllKeys(t *testing.T) {
 		"hobbies",
 		"clothing.jacket",
 		"clothing.trousers",
-		"default.import_path",
-		"default.name",
-		"default.version",
 		"clothing.pants.size",
 		"age",
 		"hacker",
 		"id",
 		"type",
 		"eyes",
-		"p_id",
-		"p_ppu",
-		"p_batters.batter.type",
-		"p_type",
-		"p_name",
-		"foos",
 		"title_dotenv",
 		"type_dotenv",
 		"name_dotenv",
@@ -786,23 +785,12 @@ func TestAllKeys(t *testing.T) {
 			"dob":          dob,
 		},
 		"title": "TOML Example",
-		"author": map[string]any{
-			"e-mail": "fake@localhost",
-			"github": "https://github.com/Unknown",
-			"name":   "Unknown",
-			"bio":    "Gopher.\nCoding addict.\nGood man.\n",
-		},
-		"ppu":  0.55,
-		"eyes": "brown",
+		"ppu":   0.55,
+		"eyes":  "brown",
 		"clothing": map[string]any{
 			"trousers": "denim",
 			"jacket":   "leather",
 			"pants":    map[string]any{"size": "large"},
-		},
-		"default": map[string]any{
-			"import_path": "gopkg.in/ini.v1",
-			"name":        "ini",
-			"version":     "v1",
 		},
 		"id": "0001",
 		"batters": map[string]any{
@@ -820,27 +808,10 @@ func TestAllKeys(t *testing.T) {
 			"snowboarding",
 			"go",
 		},
-		"age":    35,
-		"type":   "donut",
-		"newkey": "remote",
-		"name":   "Cake",
-		"p_id":   "0001",
-		"p_ppu":  "0.55",
-		"p_name": "Cake",
-		"p_batters": map[string]any{
-			"batter": map[string]any{"type": "Regular"},
-		},
-		"p_type": "donut",
-		"foos": []map[string]any{
-			{
-				"foo": []map[string]any{
-					{"key": 1},
-					{"key": 2},
-					{"key": 3},
-					{"key": 4},
-				},
-			},
-		},
+		"age":          35,
+		"type":         "donut",
+		"newkey":       "remote",
+		"name":         "Cake",
 		"title_dotenv": "DotEnv Example",
 		"type_dotenv":  "donut",
 		"name_dotenv":  "Cake",
@@ -923,6 +894,41 @@ func TestUnmarshal(t *testing.T) {
 	)
 }
 
+func TestUnmarshalWithDefaultDecodeHook(t *testing.T) {
+	opt := mapstructure.ComposeDecodeHookFunc(
+		mapstructure.StringToTimeDurationHookFunc(),
+		mapstructure.StringToSliceHookFunc(","),
+		// Custom Decode Hook Function
+		func(rf reflect.Kind, rt reflect.Kind, data any) (any, error) {
+			if rf != reflect.String || rt != reflect.Map {
+				return data, nil
+			}
+			m := map[string]string{}
+			raw := data.(string)
+			if raw == "" {
+				return m, nil
+			}
+			err := json.Unmarshal([]byte(raw), &m)
+			return m, err
+		},
+	)
+
+	v := NewWithOptions(WithDecodeHook(opt))
+	v.Set("credentials", "{\"foo\":\"bar\"}")
+
+	type config struct {
+		Credentials map[string]string
+	}
+
+	var C config
+
+	require.NoError(t, v.Unmarshal(&C), "unable to decode into struct")
+
+	assert.Equal(t, &config{
+		Credentials: map[string]string{"foo": "bar"},
+	}, &C)
+}
+
 func TestUnmarshalWithDecoderOptions(t *testing.T) {
 	v := New()
 	v.Set("credentials", "{\"foo\":\"bar\"}")
@@ -959,10 +965,6 @@ func TestUnmarshalWithDecoderOptions(t *testing.T) {
 }
 
 func TestUnmarshalWithAutomaticEnv(t *testing.T) {
-	if !features.BindStruct {
-		t.Skip("binding struct is not enabled")
-	}
-
 	t.Setenv("PORT", "1313")
 	t.Setenv("NAME", "Steve")
 	t.Setenv("DURATION", "1s1ms")
@@ -996,7 +998,7 @@ func TestUnmarshalWithAutomaticEnv(t *testing.T) {
 		Flag bool `mapstructure:"flag"`
 	}
 
-	v := New()
+	v := NewWithOptions(ExperimentalBindStruct())
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
@@ -1508,24 +1510,6 @@ func TestFindsNestedKeys(t *testing.T) {
 		"clothing.trousers":   "denim",
 		"owner.dob":           dob,
 		"beard":               true,
-		"foos": []map[string]any{
-			{
-				"foo": []map[string]any{
-					{
-						"key": 1,
-					},
-					{
-						"key": 2,
-					},
-					{
-						"key": 3,
-					},
-					{
-						"key": 4,
-					},
-				},
-			},
-		},
 	}
 
 	for key, expectedValue := range expected {
@@ -1533,20 +1517,37 @@ func TestFindsNestedKeys(t *testing.T) {
 	}
 }
 
-func TestReadBufConfig(t *testing.T) {
-	v := New()
-	v.SetConfigType("yaml")
-	v.ReadConfig(bytes.NewBuffer(yamlExample))
-	t.Log(v.AllKeys())
+func TestReadConfig(t *testing.T) {
+	t.Run("ok", func(t *testing.T) {
+		v := New()
+		v.SetConfigType("yaml")
+		err := v.ReadConfig(bytes.NewBuffer(yamlExample))
+		require.NoError(t, err)
+		t.Log(v.AllKeys())
 
-	assert.True(t, v.InConfig("name"))
-	assert.True(t, v.InConfig("clothing.jacket"))
-	assert.False(t, v.InConfig("state"))
-	assert.False(t, v.InConfig("clothing.hat"))
-	assert.Equal(t, "steve", v.Get("name"))
-	assert.Equal(t, []any{"skateboarding", "snowboarding", "go"}, v.Get("hobbies"))
-	assert.Equal(t, map[string]any{"jacket": "leather", "trousers": "denim", "pants": map[string]any{"size": "large"}}, v.Get("clothing"))
-	assert.Equal(t, 35, v.Get("age"))
+		assert.True(t, v.InConfig("name"))
+		assert.True(t, v.InConfig("clothing.jacket"))
+		assert.False(t, v.InConfig("state"))
+		assert.False(t, v.InConfig("clothing.hat"))
+		assert.Equal(t, "steve", v.Get("name"))
+		assert.Equal(t, []any{"skateboarding", "snowboarding", "go"}, v.Get("hobbies"))
+		assert.Equal(t, map[string]any{"jacket": "leather", "trousers": "denim", "pants": map[string]any{"size": "large"}}, v.Get("clothing"))
+		assert.Equal(t, 35, v.Get("age"))
+	})
+
+	t.Run("missing config type", func(t *testing.T) {
+		v := New()
+		err := v.ReadConfig(bytes.NewBuffer(yamlExample))
+		require.Error(t, err)
+	})
+}
+
+func TestReadConfigWithSetConfigFile(t *testing.T) {
+	v := New()
+	v.SetConfigFile("config.yaml") // Dummy value to infer config type from file extension
+	err := v.ReadConfig(bytes.NewBuffer(yamlMergeExampleSrc))
+	require.NoError(t, err)
+	assert.Equal(t, 45000, v.GetInt("hello.pop"))
 }
 
 func TestIsSet(t *testing.T) {
@@ -1628,7 +1629,7 @@ func TestWrongDirsSearchNotFound(t *testing.T) {
 	v.AddConfigPath(`thispathaintthere`)
 
 	err := v.ReadInConfig()
-	assert.IsType(t, err, ConfigFileNotFoundError{"", ""})
+	assert.IsType(t, ConfigFileNotFoundError{"", ""}, err)
 
 	// Even though config did not load and the error might have
 	// been ignored by the client, the default still loads
@@ -1688,31 +1689,16 @@ func TestSub(t *testing.T) {
 	assert.Equal(t, []string{"clothing", "pants"}, subv.parents)
 }
 
-var hclWriteExpected = []byte(`"foos" = {
-  "foo" = {
-    "key" = 1
-  }
+func TestSubWithKeyDelimiter(t *testing.T) {
+	v := NewWithOptions(KeyDelimiter("::"))
+	v.SetConfigType("yaml")
+	r := strings.NewReader(string(yamlExampleWithDot))
+	err := v.unmarshalReader(r, v.config)
+	require.NoError(t, err)
 
-  "foo" = {
-    "key" = 2
-  }
-
-  "foo" = {
-    "key" = 3
-  }
-
-  "foo" = {
-    "key" = 4
-  }
+	subv := v.Sub("emails")
+	assert.Equal(t, "01/02/03", subv.Get("steve@hacker.com::created"))
 }
-
-"id" = "0001"
-
-"name" = "Cake"
-
-"ppu" = 0.55
-
-"type" = "donut"`)
 
 var jsonWriteExpected = []byte(`{
   "batters": {
@@ -1736,13 +1722,6 @@ var jsonWriteExpected = []byte(`{
   "ppu": 0.55,
   "type": "donut"
 }`)
-
-var propertiesWriteExpected = []byte(`p_id = 0001
-p_type = donut
-p_name = Cake
-p_ppu = 0.55
-p_batters.batter.type = Regular
-`)
 
 // var yamlWriteExpected = []byte(`age: 35
 // beard: true
@@ -1770,30 +1749,6 @@ func TestWriteConfig(t *testing.T) {
 		input           []byte
 		expectedContent []byte
 	}{
-		"hcl with file extension": {
-			configName:      "c",
-			inConfigType:    "hcl",
-			outConfigType:   "hcl",
-			fileName:        "c.hcl",
-			input:           hclExample,
-			expectedContent: hclWriteExpected,
-		},
-		"hcl without file extension": {
-			configName:      "c",
-			inConfigType:    "hcl",
-			outConfigType:   "hcl",
-			fileName:        "c",
-			input:           hclExample,
-			expectedContent: hclWriteExpected,
-		},
-		"hcl with file extension and mismatch type": {
-			configName:      "c",
-			inConfigType:    "hcl",
-			outConfigType:   "json",
-			fileName:        "c.hcl",
-			input:           hclExample,
-			expectedContent: hclWriteExpected,
-		},
 		"json with file extension": {
 			configName:      "c",
 			inConfigType:    "json",
@@ -1817,22 +1772,6 @@ func TestWriteConfig(t *testing.T) {
 			fileName:        "c.json",
 			input:           jsonExample,
 			expectedContent: jsonWriteExpected,
-		},
-		"properties with file extension": {
-			configName:      "c",
-			inConfigType:    "properties",
-			outConfigType:   "properties",
-			fileName:        "c.properties",
-			input:           propertiesExample,
-			expectedContent: propertiesWriteExpected,
-		},
-		"properties without file extension": {
-			configName:      "c",
-			inConfigType:    "properties",
-			outConfigType:   "properties",
-			fileName:        "c",
-			input:           propertiesExample,
-			expectedContent: propertiesWriteExpected,
 		},
 		"yaml with file extension": {
 			configName:      "c",
@@ -1989,7 +1928,7 @@ func TestSafeWriteConfig(t *testing.T) {
 	require.NoError(t, v.SafeWriteConfig())
 	read, err := afero.ReadFile(fs, testutil.AbsFilePath(t, "/test/c.yaml"))
 	require.NoError(t, err)
-	assert.Equal(t, yamlWriteExpected, read)
+	assert.YAMLEq(t, string(yamlWriteExpected), string(read))
 }
 
 func TestSafeWriteConfigWithMissingConfigPath(t *testing.T) {
@@ -2019,6 +1958,7 @@ func TestSafeWriteAsConfig(t *testing.T) {
 	v := New()
 	fs := afero.NewMemMapFs()
 	v.SetFs(fs)
+	v.SetConfigType("yaml")
 	err := v.ReadConfig(bytes.NewBuffer(yamlExample))
 	require.NoError(t, err)
 	require.NoError(t, v.SafeWriteConfigAs("/test/c.yaml"))
@@ -2107,6 +2047,7 @@ func TestMergeConfig(t *testing.T) {
 	assert.Equal(t, 37890, v.GetInt("hello.pop"))
 	assert.Equal(t, int32(37890), v.GetInt32("hello.pop"))
 	assert.Equal(t, int64(765432101234567), v.GetInt64("hello.largenum"))
+	assert.Equal(t, uint8(2), v.GetUint8("hello.pop"))
 	assert.Equal(t, uint(37890), v.GetUint("hello.pop"))
 	assert.Equal(t, uint16(37890), v.GetUint16("hello.pop"))
 	assert.Equal(t, uint32(37890), v.GetUint32("hello.pop"))
@@ -2124,6 +2065,14 @@ func TestMergeConfig(t *testing.T) {
 	assert.Len(t, v.GetStringSlice("hello.universe"), 2)
 	assert.Len(t, v.GetIntSlice("hello.ints"), 2)
 	assert.Equal(t, "bar", v.GetString("fu"))
+}
+
+func TestMergeConfigWithSetConfigFile(t *testing.T) {
+	v := New()
+	v.SetConfigFile("config.yaml") // Dummy value to infer config type from file extension
+	err := v.MergeConfig(bytes.NewBuffer(yamlMergeExampleSrc))
+	require.NoError(t, err)
+	assert.Equal(t, 45000, v.GetInt("hello.pop"))
 }
 
 func TestMergeConfigOverrideType(t *testing.T) {
@@ -2568,7 +2517,7 @@ func TestKeyDelimiter(t *testing.T) {
 
 	var actual config
 
-	assert.NoError(t, v.Unmarshal(&actual))
+	require.NoError(t, v.Unmarshal(&actual))
 
 	assert.Equal(t, expected, actual)
 }
