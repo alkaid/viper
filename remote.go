@@ -3,11 +3,13 @@ package viper
 import (
 	"bytes"
 	"context"
-	"dario.cat/mergo"
 	"fmt"
 	"io"
 	"reflect"
 	"slices"
+	"sync"
+
+	"dario.cat/mergo"
 )
 
 // SupportedRemoteProviders are universally supported remote providers.
@@ -237,21 +239,7 @@ func (v *Viper) getKeyValueConfig(deepMerge bool) error {
 			continue
 		}
 		found = true
-		// 允许多个远程文件合并
-		if deepMerge {
-			// 允许深度合并
-			if err = mergo.Merge(&v.kvstore, val, mergo.WithOverride); err != nil {
-				v.logger.Error(fmt.Errorf("get remote config merge error: %w", err).Error())
-				for k, v_ := range val {
-					v.kvstore[k] = v_
-				}
-			}
-		} else {
-			// 只合并第一层
-			for k, v_ := range val {
-				v.kvstore[k] = v_
-			}
-		}
+		v.mergeRemoteConfigSnapshot(v.kvstore, val, deepMerge)
 	}
 	if found {
 		return nil
@@ -267,6 +255,71 @@ func (v *Viper) getRemoteConfig(provider RemoteProvider) (map[string]any, error)
 	val := map[string]any{}
 	err = v.unmarshalReader(reader, val)
 	return val, err
+}
+
+// mergeRemoteConfigSnapshots rebuilds the effective remote configuration from
+// all known provider snapshots.
+//
+// remoteProviders are registered from low priority to high priority, so this
+// function intentionally merges snapshots in slice order. Later snapshots
+// overwrite earlier snapshots for the same key, while lower-priority snapshots
+// still contribute fields that no higher-priority snapshot defines.
+func (v *Viper) mergeRemoteConfigSnapshots(snapshots []map[string]any, deepMerge bool) map[string]any {
+	merged := make(map[string]any)
+
+	for _, snapshot := range snapshots {
+		if snapshot == nil {
+			continue
+		}
+		v.mergeRemoteConfigSnapshot(merged, snapshot, deepMerge)
+	}
+
+	return merged
+}
+
+func (v *Viper) mergeRemoteConfigSnapshot(dst, snapshot map[string]any, deepMerge bool) {
+	if deepMerge {
+		// mergo merges nested maps by mutating the destination map in place.
+		// Copy the source snapshot first so the effective kvstore never shares
+		// nested map or slice values with a provider snapshot. The watch path
+		// later replaces individual snapshots and then rebuilds kvstore from
+		// scratch, so keeping those two data sets independent avoids stale
+		// references between generations of the merged config.
+		if err := mergo.Merge(&dst, copyRemoteConfigMap(snapshot), mergo.WithOverride); err != nil {
+			v.logger.Error(fmt.Errorf("remote config merge error: %w", err).Error())
+			for k, v_ := range snapshot {
+				dst[k] = copyRemoteConfigValue(v_)
+			}
+		}
+		return
+	}
+
+	for k, v_ := range snapshot {
+		dst[k] = copyRemoteConfigValue(v_)
+	}
+}
+
+func copyRemoteConfigMap(src map[string]any) map[string]any {
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		dst[k] = copyRemoteConfigValue(v)
+	}
+	return dst
+}
+
+func copyRemoteConfigValue(src any) any {
+	switch v := src.(type) {
+	case map[string]any:
+		return copyRemoteConfigMap(v)
+	case []any:
+		dst := make([]any, len(v))
+		for i, item := range v {
+			dst[i] = copyRemoteConfigValue(item)
+		}
+		return dst
+	default:
+		return v
+	}
 }
 
 // Retrieve the first found remote configuration.
@@ -302,13 +355,47 @@ func (v *Viper) watchKeyValueConfigOnChannel() error {
 //
 //	比 watchKeyValueConfigOnChannel 多了channel回调
 func (v *Viper) watchKeyValueConfigWithChannel(ctx context.Context, receiver chan *RemoteResponse, deepMerge bool) error {
+	if RemoteConfig == nil {
+		return RemoteConfigError("Enable the remote features by doing a blank import of the viper/remote package: '_ github.com/spf13/viper/remote'")
+	}
+
 	if len(v.remoteProviders) == 0 {
 		return RemoteConfigError("No Remote Providers")
 	}
-	for _, rp := range v.remoteProviders {
+	providers := append([]*defaultRemoteProvider(nil), v.remoteProviders...)
+	snapshots := make([]map[string]any, len(providers))
+	snapshotMu := sync.Mutex{}
+
+	for i, rp := range providers {
+		val, err := v.getRemoteConfig(rp)
+		if err != nil {
+			return fmt.Errorf("viper watchKeyValueConfigWithChannel get remote config from %s %s: %w", rp.Provider(), rp.Path(), err)
+		}
+		snapshots[i] = val
+	}
+	v.kvstore = v.mergeRemoteConfigSnapshots(snapshots, deepMerge)
+
+	responseChans := make([]<-chan *RemoteResponse, len(providers))
+	quitChans := make([]chan bool, len(providers))
+	for i, rp := range providers {
 		respc, quit := RemoteConfig.WatchChannel(rp)
+		if respc == nil || quit == nil {
+			for _, startedQuit := range quitChans[:i] {
+				if startedQuit != nil {
+					close(startedQuit)
+				}
+			}
+			return fmt.Errorf("viper watchKeyValueConfigWithChannel watch channel unavailable for %s %s", rp.Provider(), rp.Path())
+		}
+		responseChans[i] = respc
+		quitChans[i] = quit
+	}
+
+	for i := range providers {
+		respc := responseChans[i]
+		quit := quitChans[i]
 		// 去掉todo 已经加上quit channel
-		go func(rc <-chan *RemoteResponse, quit chan<- bool) {
+		go func(providerIndex int, rc <-chan *RemoteResponse, quit chan<- bool) {
 			// 关闭quit避免crypt库里goroutine泄漏,TODO 更好的方式是使用传入CancelContext来控制退出,这里受限于接口定义,不好改动
 			defer close(quit)
 			for {
@@ -332,32 +419,27 @@ func (v *Viper) watchKeyValueConfigWithChannel(ctx context.Context, receiver cha
 						v.logger.Error(fmt.Errorf("viper watchKeyValueConfigWithChannel watch remote config: %w", err).Error())
 						continue
 					}
-					// 允许多个远程文件合并
-					if deepMerge {
-						// 允许深度合并
-						if err = mergo.Merge(&v.kvstore, val, mergo.WithOverride); err != nil {
-							v.logger.Error(fmt.Errorf("viper watchKeyValueConfigWithChannel merge error: %w", err).Error())
-							for k, v_ := range val {
-								v.kvstore[k] = v_
-							}
-						}
-					} else {
-						// 只合并第一层
-						for k, v_ := range val {
-							v.kvstore[k] = v_
-						}
-					}
+					snapshotMu.Lock()
+					snapshots[providerIndex] = val
+					// 注册顺序就是远程配置优先级，从低到高。
+					//
+					// 这里不能把本次 watch 到的 val 直接 Merge 到 v.kvstore：
+					// 如果低优先级配置后变化，而同一个字段在高优先级配置里也存在，
+					// “最后一次事件”就会覆盖“更高优先级”，最终结果和优先级语义相反。
+					//
+					// 所以每个 provider 只维护自己的最新快照；任意快照变化后，都从空 map
+					// 按注册顺序重新合并全部快照。这样低优先级源只能提供高优先级源没有覆盖
+					// 的字段，高优先级源始终在最后合并并覆盖同名字段。
+					v.kvstore = v.mergeRemoteConfigSnapshots(snapshots, deepMerge)
+					snapshotMu.Unlock()
 					receiver <- b
 				}
 			}
-		}(respc, quit)
+		}(i, respc, quit)
 		// 官方bug 造成只监听一个 provider
 		// return nil
 	}
-	if len(v.remoteProviders) > 0 {
-		return nil
-	}
-	return RemoteConfigError("No Files Found")
+	return nil
 }
 
 // Retrieve the first found remote configuration.
