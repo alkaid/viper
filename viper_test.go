@@ -359,7 +359,7 @@ func TestReadInConfig(t *testing.T) {
 	t.Run("config file set", func(t *testing.T) {
 		fs := afero.NewMemMapFs()
 
-		err := fs.Mkdir("/etc/viper", 0o777)
+		err := fs.Mkdir(testutil.AbsFilePath(t, "/etc/viper"), 0o777)
 		require.NoError(t, err)
 
 		file, err := fs.Create(testutil.AbsFilePath(t, "/etc/viper/config.yaml"))
@@ -1210,6 +1210,29 @@ func TestBindPFlagsStringArray(t *testing.T) {
 	}
 }
 
+func TestBindPFlagsSlices(t *testing.T) {
+	set := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	set.IntSlice("intslice", []int{}, "")
+	set.BoolSlice("boolslice", []bool{}, "")
+	set.Float64Slice("float64slice", []float64{}, "")
+	set.UintSlice("uintslice", []uint{}, "")
+
+	v := New()
+	v.BindPFlags(set)
+
+	set.Set("intslice", "1,2")
+	assert.Equal(t, []int{1, 2}, v.Get("intslice"))
+
+	set.Set("boolslice", "true,false")
+	assert.Equal(t, []bool{true, false}, v.Get("boolslice"))
+
+	set.Set("float64slice", "1.1,2.2")
+	assert.Equal(t, []float64{1.1, 2.2}, v.Get("float64slice"))
+
+	set.Set("uintslice", "1,2")
+	assert.Equal(t, []uint{1, 2}, v.Get("uintslice"))
+}
+
 func TestSliceFlagsReturnCorrectType(t *testing.T) {
 	flagSet := pflag.NewFlagSet("test", pflag.ContinueOnError)
 	flagSet.IntSlice("int", []int{1, 2}, "")
@@ -1550,6 +1573,28 @@ func TestReadConfigWithSetConfigFile(t *testing.T) {
 	assert.Equal(t, 45000, v.GetInt("hello.pop"))
 }
 
+func TestWrongFileNotFound(t *testing.T) {
+	_, config := initDirs(t)
+
+	v := New()
+	v.SetConfigName(config)
+	v.SetDefault(`key`, `default`)
+
+	v.SetConfigFile(`whatareyoutalkingabout.yaml`)
+
+	err := v.ReadInConfig()
+
+	var fileLookupError FileLookupError
+
+	// It matches all error types and the shared error interface.
+	assert.ErrorAs(t, err, &FileNotFoundError{})
+	assert.ErrorAs(t, err, &fileLookupError)
+
+	// Even though config did not load and the error might have
+	// been ignored by the client, the default still loads
+	assert.Equal(t, `default`, v.GetString(`key`))
+}
+
 func TestIsSet(t *testing.T) {
 	v := New()
 	v.SetConfigType("yaml")
@@ -1629,7 +1674,13 @@ func TestWrongDirsSearchNotFound(t *testing.T) {
 	v.AddConfigPath(`thispathaintthere`)
 
 	err := v.ReadInConfig()
-	assert.IsType(t, ConfigFileNotFoundError{"", ""}, err)
+
+	var fileLookupError FileLookupError
+
+	// It matches all error types and the shared error interface.
+	assert.ErrorAs(t, err, &ConfigFileNotFoundError{})
+	assert.ErrorAs(t, err, &FileNotFoundFromSearchError{})
+	assert.ErrorAs(t, err, &fileLookupError)
 
 	// Even though config did not load and the error might have
 	// been ignored by the client, the default still loads
@@ -1647,7 +1698,13 @@ func TestWrongDirsSearchNotFoundForMerge(t *testing.T) {
 	v.AddConfigPath(`thispathaintthere`)
 
 	err := v.MergeInConfig()
-	assert.Equal(t, reflect.TypeOf(ConfigFileNotFoundError{"", ""}), reflect.TypeOf(err))
+
+	var fileLookupError FileLookupError
+
+	// It matches both types of errors.
+	assert.ErrorAs(t, err, &ConfigFileNotFoundError{})
+	assert.ErrorAs(t, err, &FileNotFoundFromSearchError{})
+	assert.ErrorAs(t, err, &fileLookupError)
 
 	// Even though config did not load and the error might have
 	// been ignored by the client, the default still loads

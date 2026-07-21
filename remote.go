@@ -25,6 +25,7 @@ type remoteConfigFactory interface {
 	WatchChannel(rp RemoteProvider) (<-chan *RemoteResponse, chan bool)
 }
 
+// RemoteResponse represents a response from a remote configuration provider.
 type RemoteResponse struct {
 	Value []byte
 	Error error
@@ -103,6 +104,14 @@ func AddRemoteProvider(provider, endpoint, path string) error {
 	return v.AddRemoteProvider(provider, endpoint, path)
 }
 
+// AddRemoteProvider adds a remote configuration source.
+// Remote Providers are searched in the order they are added.
+// provider is a string value: "etcd", "etcd3", "consul", "firestore" or "nats" are currently supported.
+// endpoint is the url.  etcd requires http://ip:port, consul requires ip:port, nats requires nats://ip:port
+// path is the path in the k/v store to retrieve configuration
+// To retrieve a config file called myapp.json from /configs/myapp.json
+// you should set path to /configs and set config name (SetConfigName()) to
+// "myapp".
 func (v *Viper) AddRemoteProvider(provider, endpoint, path string) error {
 	if !slices.Contains(SupportedRemoteProviders, provider) {
 		return UnsupportedRemoteProviderError(provider)
@@ -122,6 +131,7 @@ func (v *Viper) AddRemoteProvider(provider, endpoint, path string) error {
 	return nil
 }
 
+// AddRemoteProviderCluster adds a remote configuration source with multiple endpoints.
 func (v *Viper) AddRemoteProviderCluster(provider string, endpoints []string, path string) error {
 	if !slices.Contains(SupportedRemoteProviders, provider) {
 		return UnsupportedRemoteProviderError(provider)
@@ -155,6 +165,16 @@ func AddSecureRemoteProvider(provider, endpoint, path, secretkeyring string) err
 	return v.AddSecureRemoteProvider(provider, endpoint, path, secretkeyring)
 }
 
+// AddSecureRemoteProvider adds a remote configuration source.
+// Secure Remote Providers are searched in the order they are added.
+// provider is a string value: "etcd", "etcd3", "consul", "firestore" or "nats" are currently supported.
+// endpoint is the url.  etcd requires http://ip:port  consul requires ip:port
+// secretkeyring is the filepath to your openpgp secret keyring.  e.g. /etc/secrets/myring.gpg
+// path is the path in the k/v store to retrieve configuration
+// To retrieve a config file called myapp.json from /configs/myapp.json
+// you should set path to /configs and set config name (SetConfigName()) to
+// "myapp".
+// Secure Remote Providers are implemented with github.com/sagikazarmark/crypt.
 func (v *Viper) AddSecureRemoteProvider(provider, endpoint, path, secretkeyring string) error {
 	if !slices.Contains(SupportedRemoteProviders, provider) {
 		return UnsupportedRemoteProviderError(provider)
@@ -189,22 +209,32 @@ func (v *Viper) providerPathExists(p *defaultRemoteProvider) bool {
 func ReadRemoteConfig() error {
 	return v.getKeyValueConfig(false)
 }
+
+// ReadRemoteConfigWithMerged reads and optionally deep-merges all remote configuration sources.
 func ReadRemoteConfigWithMerged(merged bool) error {
 	return v.getKeyValueConfig(merged)
 }
 
+// ReadRemoteConfig attempts to get configuration from a remote source
+// and read it in the remote configuration registry.
 func (v *Viper) ReadRemoteConfig() error {
 	return v.getKeyValueConfig(false)
 }
+
+// ReadRemoteConfigWithMerged reads and optionally deep-merges all remote configuration sources.
 func (v *Viper) ReadRemoteConfigWithMerged(merged bool) error {
 	return v.getKeyValueConfig(merged)
 }
 
+// WatchRemoteConfig updates configuration from available remote providers.
 func WatchRemoteConfig() error { return v.WatchRemoteConfig() }
+
+// WatchRemoteConfig updates configuration from available remote providers.
 func (v *Viper) WatchRemoteConfig() error {
 	return v.watchKeyValueConfig()
 }
 
+// WatchRemoteConfigOnChannel updates configuration from available remote providers.
 func (v *Viper) WatchRemoteConfigOnChannel() error {
 	return v.watchKeyValueConfigOnChannel()
 }
@@ -230,7 +260,7 @@ func (v *Viper) getKeyValueConfig(deepMerge bool) error {
 		return RemoteConfigError("No Remote Providers")
 	}
 
-	var found = false
+	found := false
 	for _, rp := range v.remoteProviders {
 		val, err := v.getRemoteConfig(rp)
 		if err != nil {
@@ -287,15 +317,15 @@ func (v *Viper) mergeRemoteConfigSnapshot(dst, snapshot map[string]any, deepMerg
 		// references between generations of the merged config.
 		if err := mergo.Merge(&dst, copyRemoteConfigMap(snapshot), mergo.WithOverride); err != nil {
 			v.logger.Error(fmt.Errorf("remote config merge error: %w", err).Error())
-			for k, v_ := range snapshot {
-				dst[k] = copyRemoteConfigValue(v_)
+			for key, value := range snapshot {
+				dst[key] = copyRemoteConfigValue(value)
 			}
 		}
 		return
 	}
 
-	for k, v_ := range snapshot {
-		dst[k] = copyRemoteConfigValue(v_)
+	for key, value := range snapshot {
+		dst[key] = copyRemoteConfigValue(value)
 	}
 }
 
@@ -343,7 +373,10 @@ func (v *Viper) watchKeyValueConfigOnChannel() error {
 					break
 				}
 				reader := bytes.NewReader(b.Value)
-				v.unmarshalReader(reader, v.kvstore)
+				err := v.unmarshalReader(reader, v.kvstore)
+				if err != nil {
+					v.logger.Error(fmt.Errorf("failed to unmarshal remote config: %w", err).Error())
+				}
 			}
 		}(respc)
 		return nil
