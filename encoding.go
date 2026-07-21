@@ -5,10 +5,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/spf13/viper/internal/encoding/dotenv"
-	"github.com/spf13/viper/internal/encoding/json"
-	"github.com/spf13/viper/internal/encoding/toml"
-	"github.com/spf13/viper/internal/encoding/yaml"
+	"github.com/alkaid/viper/internal/encoding/dotenv"
+	"github.com/alkaid/viper/internal/encoding/json"
+	"github.com/alkaid/viper/internal/encoding/toml"
+	"github.com/alkaid/viper/internal/encoding/yaml"
 )
 
 // Encoder encodes Viper's internal data structures into a byte representation.

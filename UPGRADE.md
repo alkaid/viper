@@ -8,7 +8,7 @@
 
 Viper now includes a new file searching API that allows users to customize how Viper looks for config files.
 
-Viper accepts a custom [`Finder`](https://pkg.go.dev/github.com/spf13/viper#Finder) interface implementation:
+Viper accepts a custom [`Finder`](https://pkg.go.dev/github.com/alkaid/viper#Finder) interface implementation:
 
 ```go
 // Finder looks for files and directories in an [afero.Fs] filesystem.
@@ -29,7 +29,7 @@ v := viper.NewWithOptions(
 )
 ```
 
-For more information, check out the [Finder examples](https://pkg.go.dev/github.com/spf13/viper#Finder)
+For more information, check out the [Finder examples](https://pkg.go.dev/github.com/alkaid/viper#Finder)
 and the [documentation](https://pkg.go.dev/github.com/sagikazarmark/locafero) for the locafero package.
 
 ### New encoding API
@@ -67,9 +67,9 @@ The rest of the codecs are moved to [github.com/go-viper/encoding](https://githu
 
 Customizing the encoding layer is possible by providing a custom registry of codecs:
 
-- [Encoder](https://pkg.go.dev/github.com/spf13/viper#Encoder) -> [EncoderRegistry](https://pkg.go.dev/github.com/spf13/viper#EncoderRegistry)
-- [Decoder](https://pkg.go.dev/github.com/spf13/viper#Decoder) -> [DecoderRegistry](https://pkg.go.dev/github.com/spf13/viper#DecoderRegistry)
-- [Codec](https://pkg.go.dev/github.com/spf13/viper#Codec) -> [CodecRegistry](https://pkg.go.dev/github.com/spf13/viper#CodecRegistry)
+- [Encoder](https://pkg.go.dev/github.com/alkaid/viper#Encoder) -> [EncoderRegistry](https://pkg.go.dev/github.com/alkaid/viper#EncoderRegistry)
+- [Decoder](https://pkg.go.dev/github.com/alkaid/viper#Decoder) -> [DecoderRegistry](https://pkg.go.dev/github.com/alkaid/viper#DecoderRegistry)
+- [Codec](https://pkg.go.dev/github.com/alkaid/viper#Codec) -> [CodecRegistry](https://pkg.go.dev/github.com/alkaid/viper#CodecRegistry)
 
 You can supply the registry of codecs to Viper using the appropriate `With*Registry` function:
 

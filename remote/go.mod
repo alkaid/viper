@@ -1,12 +1,12 @@
-module github.com/spf13/viper/remote
+module github.com/alkaid/viper/remote
 
 go 1.23.8
 
-replace github.com/spf13/viper => ../
+replace github.com/alkaid/viper => ../
 
 require (
-	github.com/sagikazarmark/crypt v0.31.0
-	github.com/spf13/viper v1.21.0
+	github.com/alkaid/crypt v0.31.0-ak-2
+	github.com/alkaid/viper v1.21.0-ak-5
 )
 
 require (
@@ -87,7 +87,3 @@ require (
 	google.golang.org/grpc v1.75.1 // indirect
 	google.golang.org/protobuf v1.36.7 // indirect
 )
-
-//replace github.com/sagikazarmark/crypt v0.31.0 => ../../crypt
-
-replace github.com/sagikazarmark/crypt v0.31.0 => github.com/alkaid/crypt v0.31.0-ak-1

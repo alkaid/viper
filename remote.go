@@ -160,7 +160,7 @@ func (v *Viper) AddRemoteProviderCluster(provider string, endpoints []string, pa
 // To retrieve a config file called myapp.json from /configs/myapp.json
 // you should set path to /configs and set config name (SetConfigName()) to
 // "myapp".
-// Secure Remote Providers are implemented with github.com/sagikazarmark/crypt.
+// Secure Remote Providers are implemented with github.com/alkaid/crypt.
 func AddSecureRemoteProvider(provider, endpoint, path, secretkeyring string) error {
 	return v.AddSecureRemoteProvider(provider, endpoint, path, secretkeyring)
 }
@@ -174,7 +174,7 @@ func AddSecureRemoteProvider(provider, endpoint, path, secretkeyring string) err
 // To retrieve a config file called myapp.json from /configs/myapp.json
 // you should set path to /configs and set config name (SetConfigName()) to
 // "myapp".
-// Secure Remote Providers are implemented with github.com/sagikazarmark/crypt.
+// Secure Remote Providers are implemented with github.com/alkaid/crypt.
 func (v *Viper) AddSecureRemoteProvider(provider, endpoint, path, secretkeyring string) error {
 	if !slices.Contains(SupportedRemoteProviders, provider) {
 		return UnsupportedRemoteProviderError(provider)
@@ -253,7 +253,7 @@ func (v *Viper) WatchRemoteConfigWithChannel(ctx context.Context, receiver chan 
 // Retrieve the first found remote configuration.
 func (v *Viper) getKeyValueConfig(deepMerge bool) error {
 	if RemoteConfig == nil {
-		return RemoteConfigError("Enable the remote features by doing a blank import of the viper/remote package: '_ github.com/spf13/viper/remote'")
+		return RemoteConfigError("Enable the remote features by doing a blank import of the viper/remote package: '_ github.com/alkaid/viper/remote'")
 	}
 
 	if len(v.remoteProviders) == 0 {
@@ -389,7 +389,7 @@ func (v *Viper) watchKeyValueConfigOnChannel() error {
 //	比 watchKeyValueConfigOnChannel 多了channel回调
 func (v *Viper) watchKeyValueConfigWithChannel(ctx context.Context, receiver chan *RemoteResponse, deepMerge bool) error {
 	if RemoteConfig == nil {
-		return RemoteConfigError("Enable the remote features by doing a blank import of the viper/remote package: '_ github.com/spf13/viper/remote'")
+		return RemoteConfigError("Enable the remote features by doing a blank import of the viper/remote package: '_ github.com/alkaid/viper/remote'")
 	}
 
 	if len(v.remoteProviders) == 0 {

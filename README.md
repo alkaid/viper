@@ -15,7 +15,7 @@
 [![Join the chat at https://gitter.im/spf13/viper](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/spf13/viper?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 [![Go Report Card](https://goreportcard.com/badge/github.com/spf13/viper?style=flat-square)](https://goreportcard.com/report/github.com/spf13/viper)
 ![Go Version](https://img.shields.io/badge/go%20version-%3E=1.23-61CFDD.svg?style=flat-square)
-[![PkgGoDev](https://pkg.go.dev/badge/mod/github.com/spf13/viper)](https://pkg.go.dev/mod/github.com/spf13/viper)
+[![PkgGoDev](https://pkg.go.dev/badge/mod/github.com/alkaid/viper)](https://pkg.go.dev/mod/github.com/alkaid/viper)
 
 **Go configuration with fangs!**
 
@@ -39,7 +39,7 @@ Many Go projects are built using Viper including:
 ## Install
 
 ```shell
-go get github.com/spf13/viper
+go get github.com/alkaid/viper
 ```
 
 > **NOTE** Viper uses [Go Modules](https://go.dev/wiki/Modules) to manage dependencies.
@@ -363,7 +363,7 @@ To enable remote support in Viper, do a blank import of the `viper/remote`
 package.
 
 ```go
-import _ "github.com/spf13/viper/remote"
+import _ "github.com/alkaid/viper/remote"
 ```
 
 Viper supports the following remote key/value stores. Examples for each are
@@ -381,7 +381,7 @@ Viper supports multiple hosts separated by `;`. For example:
 
 #### Encryption
 
-Viper uses [crypt](https://github.com/sagikazarmark/crypt) to retrieve
+Viper uses [crypt](https://github.com/alkaid/crypt) to retrieve
 configuration from the key/value store, which means that you can store your
 configuration values encrypted and have them automatically decrypted if you
 have the correct GPG keyring. Encryption is optional.
@@ -390,7 +390,7 @@ Crypt has a command-line helper that you can use to put configurations in your
 key/value store.
 
 ```bash
-$ go get github.com/sagikazarmark/crypt/bin/crypt
+$ go get github.com/alkaid/crypt/bin/crypt
 $ crypt set -plaintext /config/hugo.json /Users/hugo/settings/config.json
 $ crypt get -plaintext /config/hugo.json
 ```
