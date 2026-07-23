@@ -13,7 +13,6 @@ import (
 	"strings"
 
 	crypt "github.com/alkaid/crypt/config"
-
 	"github.com/alkaid/viper"
 )
 
@@ -49,29 +48,36 @@ func (rc remoteConfigProvider) WatchChannel(rp viper.RemoteProvider) (<-chan *vi
 	if err != nil {
 		return nil, nil
 	}
+	return watchConfigManager(cm, rp.Path())
+}
+
+func watchConfigManager(cm crypt.ConfigManager, path string) (<-chan *viper.RemoteResponse, chan bool) {
 	quit := make(chan bool)
 	quitwc := make(chan bool)
 	viperResponsCh := make(chan *viper.RemoteResponse)
-	cryptoResponseCh := cm.Watch(rp.Path(), quit)
+	cryptoResponseCh := cm.Watch(path, quit)
 	// need this function to convert the Channel response form crypt.Response to viper.Response
-	go func(cr <-chan *crypt.Response, vr chan<- *viper.RemoteResponse, quitwc <-chan bool, quit chan<- bool) {
+	go func(cr <-chan *crypt.Response, vr chan<- *viper.RemoteResponse, quitwc <-chan bool, quit chan bool) {
 		defer func() {
-			// 关闭quit避免crypt库里goroutine泄漏,TODO 更好的方式是使用传入CancelContext来控制退出,这里受限于接口定义,不好改动
 			close(quit)
 			close(vr)
 		}()
 		for {
 			select {
 			case <-quitwc:
-				quit <- true
 				return
 			case resp, ok := <-cr:
 				if !ok {
 					return
 				}
-				vr <- &viper.RemoteResponse{
+				response := &viper.RemoteResponse{
 					Error: resp.Error,
 					Value: resp.Value,
+				}
+				select {
+				case vr <- response:
+				case <-quitwc:
+					return
 				}
 				if resp.Error != nil {
 					return
@@ -88,8 +94,9 @@ func getConfigManager(rp viper.RemoteProvider) (crypt.ConfigManager, error) {
 	var err error
 
 	endpoints := strings.Split(rp.Endpoint(), ";")
-	if len(rp.Endpoints()) > 0 {
-		endpoints = rp.Endpoints()
+	providerEndpoints := rp.Endpoints()
+	if len(providerEndpoints) > 0 {
+		endpoints = providerEndpoints
 	}
 	if rp.SecretKeyring() != "" {
 		var kr *os.File
