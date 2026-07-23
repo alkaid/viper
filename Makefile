@@ -16,7 +16,8 @@ endif
 
 # Dependency versions
 GOTESTSUM_VERSION = 1.9.0
-GOLANGCI_VERSION = 1.53.3
+GOLANGCI_VERSION = 2.12.2
+GOLANGCI_LINT = bin/golangci-lint-${GOLANGCI_VERSION}
 
 # Add the ability to override some variables
 # Use with care
@@ -44,27 +45,29 @@ lint: lint-go lint-yaml
 lint: ## Run linters
 
 .PHONY: lint-go
-lint-go:
-	golangci-lint run $(if ${CI},--out-format github-actions,)
+lint-go: ${GOLANGCI_LINT}
+	${GOLANGCI_LINT} run
+	cd remote && ../${GOLANGCI_LINT} run
 
 .PHONY: lint-yaml
 lint-yaml:
 	yamllint $(if ${CI},-f github,) --no-warnings .
 
 .PHONY: fmt
-fmt: ## Format code
-	golangci-lint run --fix
+fmt: ${GOLANGCI_LINT} ## Format code
+	${GOLANGCI_LINT} run --fix
 
-deps: bin/golangci-lint bin/gotestsum yamllint
+deps: ${GOLANGCI_LINT} bin/gotestsum yamllint
 deps: ## Install dependencies
 
 bin/gotestsum:
 	@mkdir -p bin
 	curl -L https://github.com/gotestyourself/gotestsum/releases/download/v${GOTESTSUM_VERSION}/gotestsum_${GOTESTSUM_VERSION}_${OS}_amd64.tar.gz | tar -zOxf - gotestsum > ./bin/gotestsum && chmod +x ./bin/gotestsum
 
-bin/golangci-lint:
+${GOLANGCI_LINT}:
 	@mkdir -p bin
-	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- v${GOLANGCI_VERSION}
+	GOBIN=$(abspath bin) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v${GOLANGCI_VERSION}
+	mv ./bin/golangci-lint $@
 
 .PHONY: yamllint
 yamllint:

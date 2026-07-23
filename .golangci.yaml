@@ -78,9 +78,13 @@ linters:
   exclusions:
     rules:
       - linters:
-        - errcheck
-        - noctx
+          - errcheck
+          - noctx
         path: _test.go
+      - linters:
+          - gomoddirectives
+        path: remote/go\.mod$
+        text: local replacement are not allowed
     presets:
       - std-error-handling
 
