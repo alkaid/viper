@@ -1,12 +1,12 @@
 module github.com/alkaid/viper/remote
 
-go 1.26.5
+go 1.27.1
 
 replace github.com/alkaid/viper => ../
 
 require (
-	github.com/alkaid/crypt v0.31.0-ak-3
-	github.com/alkaid/viper v1.21.0-ak-6
+	github.com/alkaid/crypt v0.31.0-ak-4
+	github.com/alkaid/viper v1.21.0-ak-7
 )
 
 require (
