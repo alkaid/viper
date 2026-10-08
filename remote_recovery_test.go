@@ -3,9 +3,10 @@ package viper
 import (
 	"context"
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestWatchCloseReachesSupervisor(t *testing.T) {
@@ -28,6 +29,7 @@ func TestWatchCloseReachesSupervisor(t *testing.T) {
 		t.Fatal("provider close was swallowed")
 	}
 }
+
 func TestConcurrentRemoteReadsAndWholeSnapshots(t *testing.T) {
 	f := newTestRemoteConfigFactory(map[string][]byte{"/config": []byte(`{"a":0,"b":0}`)})
 	installTestRemoteConfig(t, f)
