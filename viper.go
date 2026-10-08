@@ -967,6 +967,10 @@ func Unmarshal(rawVal any, opts ...DecoderConfigOption) error {
 // Unmarshal unmarshals the config into a Struct. Make sure that the tags
 // on the fields of the structure are properly set.
 func (v *Viper) Unmarshal(rawVal any, opts ...DecoderConfigOption) error {
+	return v.unmarshalSnapshot(rawVal, v.remoteSnapshot(), opts...)
+}
+
+func (v *Viper) unmarshalSnapshot(rawVal any, remote map[string]any, opts ...DecoderConfigOption) error {
 	var keys []string
 
 	if v.experimentalBindStruct {
@@ -980,7 +984,7 @@ func (v *Viper) Unmarshal(rawVal any, opts ...DecoderConfigOption) error {
 	}
 
 	// TODO: struct keys should be enough?
-	return decode(v.settingsSnapshot(keys), v.defaultDecoderConfig(rawVal, opts...))
+	return decode(v.getSettings(append(v.allKeys(remote), keys...), remote), v.defaultDecoderConfig(rawVal, opts...))
 }
 
 func (v *Viper) decodeStructKeys(input any, opts ...DecoderConfigOption) ([]string, error) {
