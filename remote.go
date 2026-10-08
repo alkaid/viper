@@ -8,7 +8,6 @@ import (
 	"io"
 	"reflect"
 	"slices"
-	"sync"
 
 	"dario.cat/mergo"
 )
@@ -286,7 +285,15 @@ func (v *Viper) getKeyValueConfig(deepMerge bool) error {
 		return errors.Join(providerErrors...)
 	}
 
+	v.remoteMu.Lock()
+	if v.remoteSnapshots == nil {
+		v.remoteSnapshots = make(map[*defaultRemoteProvider]map[string]any)
+	}
+	for i, rp := range v.remoteProviders {
+		v.remoteSnapshots[rp] = snapshots[i]
+	}
 	v.kvstore = v.mergeRemoteConfigSnapshots(snapshots, deepMerge)
+	v.remoteMu.Unlock()
 	return nil
 }
 
@@ -395,7 +402,17 @@ func (v *Viper) watchKeyValueConfigOnChannel() error {
 					break
 				}
 				reader := bytes.NewReader(b.Value)
-				err := v.unmarshalReader(reader, v.kvstore)
+				value := copyRemoteConfigMap(v.remoteSnapshot())
+				err := v.unmarshalReader(reader, value)
+				if err == nil {
+					v.remoteMu.Lock()
+					v.kvstore = value
+					// Legacy watches merge into the effective map, so their provider
+					// contributions cannot be recovered from it. Invalidate the cache
+					// rather than roll back to an older provider snapshot on restart.
+					clear(v.remoteSnapshots)
+					v.remoteMu.Unlock()
+				}
 				if err != nil {
 					v.logger.Error(fmt.Errorf("failed to unmarshal remote config: %w", err).Error())
 				}
@@ -419,16 +436,34 @@ func (v *Viper) watchKeyValueConfigWithChannel(ctx context.Context, receiver cha
 	}
 	providers := append([]*defaultRemoteProvider(nil), v.remoteProviders...)
 	snapshots := make([]map[string]any, len(providers))
-	snapshotMu := sync.Mutex{}
 
 	for i, rp := range providers {
 		val, err := v.getRemoteConfig(rp)
 		if err != nil {
-			return fmt.Errorf("viper watchKeyValueConfigWithChannel get remote config from %s %s: %w", rp.Provider(), rp.Path(), err)
+			v.remoteMu.RLock()
+			cached, ok := v.remoteSnapshots[rp]
+			v.remoteMu.RUnlock()
+			if !ok {
+				return fmt.Errorf("viper watch get %s %s: %w", rp.Provider(), rp.Path(), err)
+			}
+			v.logger.Error("remote snapshot unavailable; retaining previous value", "path", rp.Path(), "error", err)
+			val = cached
 		}
 		snapshots[i] = val
 	}
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	v.remoteMu.Lock()
+	if v.remoteSnapshots == nil {
+		v.remoteSnapshots = make(map[*defaultRemoteProvider]map[string]any)
+	}
+	for i, rp := range providers {
+		v.remoteSnapshots[rp] = snapshots[i]
+	}
 	v.kvstore = v.mergeRemoteConfigSnapshots(snapshots, deepMerge)
+	v.remoteMu.Unlock()
 
 	responseChans := make([]<-chan *RemoteResponse, len(providers))
 	quitChans := make([]chan bool, len(providers))
@@ -450,53 +485,45 @@ func (v *Viper) watchKeyValueConfigWithChannel(ctx context.Context, receiver cha
 	}
 
 	for i := range providers {
-		respc := responseChans[i]
-		quit := quitChans[i]
-		// 去掉todo 已经加上quit channel
-		go func(providerIndex int, rc <-chan *RemoteResponse, quit chan bool) {
-			defer close(quit)
+		go func(index int) {
+			defer close(quitChans[index])
 			for {
 				select {
 				case <-ctx.Done():
 					return
-				case b, ok := <-rc:
-					if !ok {
+				case response, ok := <-responseChans[index]:
+					if !ok || response == nil {
+						sendRemoteResponse(ctx, receiver, &RemoteResponse{Error: fmt.Errorf("remote watch closed: %s", providers[index].Path())})
 						return
 					}
-					if b.Error != nil {
-						v.logger.Error(fmt.Errorf("viper watchKeyValueConfigWithChannel watch remote config: %w", b.Error).Error())
-						sendRemoteResponse(ctx, receiver, b)
+					if response.Error != nil {
+						sendRemoteResponse(ctx, receiver, response)
 						return
 					}
-					reader := bytes.NewReader(b.Value)
-					val := map[string]any{}
-					err := v.unmarshalReader(reader, val)
-					if err != nil {
-						v.logger.Error(fmt.Errorf("viper watchKeyValueConfigWithChannel watch remote config: %w", err).Error())
+					snapshot := map[string]any{}
+					if err := v.unmarshalReader(bytes.NewReader(response.Value), snapshot); err != nil {
+						v.logger.Error("invalid remote configuration; retaining previous snapshot", "path", providers[index].Path(), "error", err)
 						continue
 					}
-					snapshotMu.Lock()
-					snapshots[providerIndex] = val
-					// 注册顺序就是远程配置优先级，从低到高。
-					//
-					// 这里不能把本次 watch 到的 val 直接 Merge 到 v.kvstore：
-					// 如果低优先级配置后变化，而同一个字段在高优先级配置里也存在，
-					// “最后一次事件”就会覆盖“更高优先级”，最终结果和优先级语义相反。
-					//
-					// 所以每个 provider 只维护自己的最新快照；任意快照变化后，都从空 map
-					// 按注册顺序重新合并全部快照。这样低优先级源只能提供高优先级源没有覆盖
-					// 的字段，高优先级源始终在最后合并并覆盖同名字段。
+					v.remoteMu.Lock()
+					if ctx.Err() != nil {
+						v.remoteMu.Unlock()
+						return
+					}
+					snapshots[index] = snapshot
+					for j, rp := range providers {
+						v.remoteSnapshots[rp] = snapshots[j]
+					}
 					v.kvstore = v.mergeRemoteConfigSnapshots(snapshots, deepMerge)
-					snapshotMu.Unlock()
-					if !sendRemoteResponse(ctx, receiver, b) {
+					v.remoteMu.Unlock()
+					if !sendRemoteResponse(ctx, receiver, response) {
 						return
 					}
 				}
 			}
-		}(i, respc, quit)
-		// 官方bug 造成只监听一个 provider
-		// return nil
+		}(i)
 	}
+
 	return nil
 }
 
@@ -513,7 +540,10 @@ func (v *Viper) watchKeyValueConfig() error {
 
 			continue
 		}
+		v.remoteMu.Lock()
 		v.kvstore = val
+		clear(v.remoteSnapshots) // see the legacy channel watch above
+		v.remoteMu.Unlock()
 		return nil
 	}
 	return RemoteConfigError("No Files Found")
@@ -524,6 +554,7 @@ func (v *Viper) watchRemoteConfig(provider RemoteProvider) (map[string]any, erro
 	if err != nil {
 		return nil, err
 	}
-	err = v.unmarshalReader(reader, v.kvstore)
-	return v.kvstore, err
+	value := copyRemoteConfigMap(v.remoteSnapshot())
+	err = v.unmarshalReader(reader, value)
+	return value, err
 }

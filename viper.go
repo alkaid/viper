@@ -131,15 +131,17 @@ type Viper struct {
 	envKeyReplacer      StringReplacer
 	allowEmptyEnv       bool
 
-	parents        []string
-	config         map[string]any
-	override       map[string]any
-	defaults       map[string]any
-	kvstore        map[string]any
-	pflags         map[string]FlagValue
-	env            map[string][]string
-	aliases        map[string]string
-	typeByDefValue bool
+	parents         []string
+	config          map[string]any
+	override        map[string]any
+	defaults        map[string]any
+	remoteMu        sync.RWMutex // protects remote snapshots against asynchronous watch updates
+	remoteSnapshots map[*defaultRemoteProvider]map[string]any
+	kvstore         map[string]any
+	pflags          map[string]FlagValue
+	env             map[string][]string
+	aliases         map[string]string
+	typeByDefValue  bool
 
 	onConfigChange func(fsnotify.Event)
 
@@ -713,8 +715,12 @@ func Get(key string) any { return v.Get(key) }
 //
 // Get returns an interface. For a specific value use one of the Get____ methods.
 func (v *Viper) Get(key string) any {
+	return v.get(key, v.remoteSnapshot())
+}
+
+func (v *Viper) get(key string, remote map[string]any) any {
 	lcaseKey := strings.ToLower(key)
-	val := v.find(lcaseKey, true)
+	val := v.find(lcaseKey, true, remote)
 	if val == nil {
 		return nil
 	}
@@ -961,7 +967,7 @@ func Unmarshal(rawVal any, opts ...DecoderConfigOption) error {
 // Unmarshal unmarshals the config into a Struct. Make sure that the tags
 // on the fields of the structure are properly set.
 func (v *Viper) Unmarshal(rawVal any, opts ...DecoderConfigOption) error {
-	keys := v.AllKeys()
+	var keys []string
 
 	if v.experimentalBindStruct {
 		// TODO: make this optional?
@@ -974,7 +980,7 @@ func (v *Viper) Unmarshal(rawVal any, opts ...DecoderConfigOption) error {
 	}
 
 	// TODO: struct keys should be enough?
-	return decode(v.getSettings(keys), v.defaultDecoderConfig(rawVal, opts...))
+	return decode(v.settingsSnapshot(keys), v.defaultDecoderConfig(rawVal, opts...))
 }
 
 func (v *Viper) decodeStructKeys(input any, opts ...DecoderConfigOption) ([]string, error) {
@@ -1066,7 +1072,7 @@ func (v *Viper) UnmarshalExact(rawVal any, opts ...DecoderConfigOption) error {
 	config := v.defaultDecoderConfig(rawVal, opts...)
 	config.ErrorUnused = true
 
-	keys := v.AllKeys()
+	var keys []string
 
 	if v.experimentalBindStruct {
 		// TODO: make this optional?
@@ -1079,7 +1085,7 @@ func (v *Viper) UnmarshalExact(rawVal any, opts ...DecoderConfigOption) error {
 	}
 
 	// TODO: struct keys should be enough?
-	return decode(v.getSettings(keys), config)
+	return decode(v.settingsSnapshot(keys), config)
 }
 
 // BindPFlags binds a full flag set to the configuration, using each flag's long
@@ -1191,7 +1197,7 @@ func (v *Viper) MustBindEnv(input ...string) {
 // corresponds to a flag, the flag's default value is returned.
 //
 // Note: this assumes a lower-cased key given.
-func (v *Viper) find(lcaseKey string, flagDefault bool) any {
+func (v *Viper) find(lcaseKey string, flagDefault bool, remote map[string]any) any {
 	var (
 		val    any
 		exists bool
@@ -1302,11 +1308,11 @@ func (v *Viper) find(lcaseKey string, flagDefault bool) any {
 	}
 
 	// K/V store next
-	val = v.searchMap(v.kvstore, path)
+	val = v.searchMap(remote, path)
 	if val != nil {
 		return val
 	}
-	if nested && v.isPathShadowedInDeepMap(path, v.kvstore) != "" {
+	if nested && v.isPathShadowedInDeepMap(path, remote) != "" {
 		return nil
 	}
 
@@ -1437,7 +1443,7 @@ func IsSet(key string) bool { return v.IsSet(key) }
 // IsSet is case-insensitive for a key.
 func (v *Viper) IsSet(key string) bool {
 	lcaseKey := strings.ToLower(key)
-	val := v.find(lcaseKey, false)
+	val := v.find(lcaseKey, false, v.remoteSnapshot())
 	return val != nil
 }
 
@@ -1486,10 +1492,14 @@ func (v *Viper) registerAlias(alias, key string) {
 				delete(v.config, alias)
 				v.config[key] = val
 			}
+			v.remoteMu.Lock()
 			if val, ok := v.kvstore[alias]; ok {
-				delete(v.kvstore, alias)
-				v.kvstore[key] = val
+				snapshot := copyRemoteConfigMap(v.kvstore)
+				delete(snapshot, alias)
+				snapshot[key] = val
+				v.kvstore = snapshot
 			}
+			v.remoteMu.Unlock()
 			if val, ok := v.defaults[alias]; ok {
 				delete(v.defaults, alias)
 				v.defaults[key] = val
@@ -1968,6 +1978,10 @@ func AllKeys() []string { return v.AllKeys() }
 // AllKeys returns all keys holding a value, regardless of where they are set.
 // Nested keys are returned with a v.keyDelim separator.
 func (v *Viper) AllKeys() []string {
+	return v.allKeys(v.remoteSnapshot())
+}
+
+func (v *Viper) allKeys(remote map[string]any) []string {
 	m := map[string]bool{}
 	// add all paths, by order of descending priority to ensure correct shadowing
 	m = v.flattenAndMergeMap(m, castMapStringToMapInterface(v.aliases), "")
@@ -1975,7 +1989,7 @@ func (v *Viper) AllKeys() []string {
 	m = v.mergeFlatMap(m, castMapFlagToMapInterface(v.pflags))
 	m = v.mergeFlatMap(m, castMapStringSliceToMapInterface(v.env))
 	m = v.flattenAndMergeMap(m, v.config, "")
-	m = v.flattenAndMergeMap(m, v.kvstore, "")
+	m = v.flattenAndMergeMap(m, remote, "")
 	m = v.flattenAndMergeMap(m, v.defaults, "")
 
 	// convert set of paths to list
@@ -2051,14 +2065,27 @@ func AllSettings() map[string]any { return v.AllSettings() }
 
 // AllSettings merges all settings and returns them as a map[string]any.
 func (v *Viper) AllSettings() map[string]any {
-	return v.getSettings(v.AllKeys())
+	return v.settingsSnapshot(nil)
 }
 
-func (v *Viper) getSettings(keys []string) map[string]any {
+func (v *Viper) settingsSnapshot(extraKeys []string) map[string]any {
+	remote := v.remoteSnapshot()
+	return v.getSettings(append(v.allKeys(remote), extraKeys...), remote)
+}
+
+// Writers replace complete maps; readers may finish on the previous snapshot.
+// Never hold the lock while invoking application-supplied flag, codec or logging hooks.
+func (v *Viper) remoteSnapshot() map[string]any {
+	v.remoteMu.RLock()
+	defer v.remoteMu.RUnlock()
+	return v.kvstore
+}
+
+func (v *Viper) getSettings(keys []string, remote map[string]any) map[string]any {
 	m := map[string]any{}
 	// start from the list of keys, and construct the map one value at a time
 	for _, k := range keys {
-		value := v.Get(k)
+		value := v.get(k, remote)
 		if value == nil {
 			// should not happen, since AllKeys() returns only keys holding a value,
 			// check just in case anything changes
@@ -2164,7 +2191,7 @@ func (v *Viper) DebugTo(w io.Writer) {
 	fmt.Fprintf(w, "Override:\n%#v\n", v.override)
 	fmt.Fprintf(w, "PFlags:\n%#v\n", v.pflags)
 	fmt.Fprintf(w, "Env:\n%#v\n", v.env)
-	fmt.Fprintf(w, "Key/Value Store:\n%#v\n", v.kvstore)
+	fmt.Fprintf(w, "Key/Value Store:\n%#v\n", v.remoteSnapshot())
 	fmt.Fprintf(w, "Config:\n%#v\n", v.config)
 	fmt.Fprintf(w, "Defaults:\n%#v\n", v.defaults)
 }
